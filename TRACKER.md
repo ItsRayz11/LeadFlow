@@ -7,12 +7,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
 | Area | Choice | Status |
 |---|---|---|
-| Hosting | Vercel **or** Netlify | [ ] decide |
-| Database | Supabase **or** Neon (Postgres) | [ ] decide |
-| Source control | GitHub | [ ] repo created |
-| Language | TypeScript full-stack | [ ] confirm framework (suggested: Next.js + Drizzle/Prisma) |
+| Hosting | Vercel | [x] chosen (not yet deployed) |
+| Database | Neon Postgres, project `leadflow` (super-firefly-90437398, aws-ap-southeast-1) | [x] created, schema migrated |
+| Source control | GitHub | [~] local git committed; remote not created yet |
+| Language | TypeScript full-stack | [x] Next.js + Drizzle in app/ |
 | Background jobs | Vercel Cron / Netlify Scheduled Functions / pg_cron | [ ] decide |
-| Auth | Supabase Auth / Neon Auth / Auth.js | [ ] decide |
+| Auth | Better Auth (tables in schema) | [~] tables ready, wiring pending |
 
 Notes
 - Priority order: Follow-up reliability → Data integrity → Mobile usability → Team accountability → Sheets sync → Premium design → AI.
@@ -34,13 +34,13 @@ Notes
 - [ ] Field-mapping report
 - [ ] Row-identity strategy (no row numbers as identity)
 - [ ] Data ownership / sync rules documented
-- [ ] DB schema + ERD
+- [x] DB schema (src/db/schema.ts, migration 0000 applied)
 - [ ] Implementation plan
 
 ## Phase 2 — Core CRM
-- [ ] Project scaffold, CI, env handling
+- [x] Project scaffold + env handling (CI pending)
 - [ ] Auth + roles (Admin / Manager / BD / read-only)
-- [ ] Migrations + indexes
+- [x] Migrations + indexes
 - [ ] Lead table, list, filters, search, pagination
 - [ ] Lead profile (contact, status, milestones, timeline)
 - [ ] Lead status / follow-up step / milestones / outcomes as separate fields
@@ -120,4 +120,5 @@ Notes
 
 | Date | Update |
 |---|---|
-| 2026-11-04 | Spec saved; tracker created. Nothing built yet. |
+| 2026-11-04 | Spec saved; tracker created. |
+| 2026-11-04 | Next.js scaffold, Neon project + full schema migrated, local git commit. GitHub remote creation was blocked, awaiting user. |
