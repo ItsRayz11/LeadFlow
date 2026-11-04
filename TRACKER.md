@@ -7,9 +7,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
 | Area | Choice | Status |
 |---|---|---|
-| Hosting | Vercel | [x] chosen (not yet deployed) |
+| Hosting | Vercel (leadflow-five-beta.vercel.app), auto-deploy on push | [x] live |
 | Database | Neon Postgres, project `leadflow` (super-firefly-90437398, aws-ap-southeast-1) | [x] created, schema migrated |
-| Source control | GitHub | [~] local git committed; remote not created yet |
+| Source control | GitHub ItsRayz11/LeadFlow (public) | [x] |
 | Language | TypeScript full-stack | [x] Next.js + Drizzle in app/ |
 | Background jobs | Vercel Cron / Netlify Scheduled Functions / pg_cron | [ ] decide |
 | Auth | Better Auth (tables in schema) | [~] tables ready, wiring pending |
@@ -39,10 +39,10 @@ Notes
 
 ## Phase 2 — Core CRM
 - [x] Project scaffold + env handling (CI pending)
-- [ ] Auth + roles (Admin / Manager / BD / read-only)
+- [~] Auth + roles: Better Auth sign-in, first user = admin, invite-only after; invite UI pending
 - [x] Migrations + indexes
-- [ ] Lead table, list, filters, search, pagination
-- [ ] Lead profile (contact, status, milestones, timeline)
+- [~] Lead list with segments + search (real DB); pagination/filters by owner & source pending
+- [~] Lead profile read-only; actions pending
 - [ ] Lead status / follow-up step / milestones / outcomes as separate fields
 - [ ] Assignment: manual, bulk, reassign w/ reason, backup owner
 - [ ] Activity timeline + audit log
@@ -122,3 +122,5 @@ Notes
 |---|---|
 | 2026-11-04 | Spec saved; tracker created. |
 | 2026-11-04 | Next.js scaffold, Neon project + full schema migrated, local git commit. GitHub remote creation was blocked, awaiting user. |
+| 2026-11-04 | Pushed to GitHub, Vercel root=app, env vars set, auto-deploy on. Added login, workspace bootstrap, overview metrics, lead list, add-lead with duplicate check, lead profile (read-only). |
+

@@ -287,3 +287,12 @@ export const aiInsight = pgTable("ai_insight", {
   model: text("model"),
   createdAt: ts("created_at").notNull().defaultNow(),
 });
+
+export const invite = pgTable("invite", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspace.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  role: roleEnum("role").notNull().default("bd"),
+  displayName: text("display_name").notNull(),
+  createdAt: ts("created_at").notNull().defaultNow(),
+}, (t) => [uniqueIndex("invite_ws_email_uq").on(t.workspaceId, t.email)]);
