@@ -19,7 +19,7 @@ export function RegisterForm({ kind, token, email, defaultName }: { kind: "setup
       fetchOptions: { headers },
     });
     setBusy(false);
-    if (res.error) return setErr(res.error.message ?? "Could not create the account.");
+    if (res.error) return setErr((res.error.message ?? "Could not create the account.") + (kind === "setup" ? " If you started setup before, sign in with that account and open /setup again to finish." : ""));
     router.replace("/"); router.refresh();
   }
 

@@ -5,6 +5,7 @@ import { SideNav, TabBar } from "@/components/Nav";
 import { canManage, getCtx } from "@/lib/session";
 import { auth } from "@/lib/auth";
 import { db, schema } from "@/db";
+import { count } from "drizzle-orm";
 import { scope } from "@/lib/leads";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -12,6 +13,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!ctx) {
     const s = await auth.api.getSession({ headers: await headers() });
     if (!s) redirect("/login");
+    const owner = process.env.OWNER_EMAIL?.trim().toLowerCase();
+    if (owner && s.user.email.toLowerCase() === owner) {
+      const [{ n }] = await db.select({ n: count() }).from(schema.workspace);
+      if (n === 0) redirect("/setup"); // interrupted registration: let the owner finish setup
+    }
     return (
       <div className="authwrap"><div className="authcard glass">
         <h1 style={{ fontSize: 22 }}>No access</h1>
