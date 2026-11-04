@@ -123,4 +123,5 @@ Notes
 | 2026-11-04 | Spec saved; tracker created. |
 | 2026-11-04 | Next.js scaffold, Neon project + full schema migrated, local git commit. GitHub remote creation was blocked, awaiting user. |
 | 2026-11-04 | Pushed to GitHub, Vercel root=app, env vars set, auto-deploy on. Added login, workspace bootstrap, overview metrics, lead list, add-lead with duplicate check, lead profile (read-only). |
-| 2026-11-04 | Phase 3 follow-up engine, follow-up dashboard, invitations and team, worker, interactive lead page. Tests green on staging. Production migration and deploy waiting for approval. |
+| 2026-11-04 | Phase 3 follow-up engine, follow-up dashboard, invitations and team, worker, interactive lead page. Tests green on staging. |
+| 2026-11-04 | Production rollout: backup branch pre-rollout-20261104, migrations 0002 and 0003 applied and schema matched to staging, OWNER_EMAIL and SETUP_TOKEN set, deployed, unauthenticated checks passed, GitHub scheduler verified by manual run. Owner account not yet created. Next: owner registers at /setup, then Google Sheets integration. |
