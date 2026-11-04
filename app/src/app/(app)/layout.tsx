@@ -1,8 +1,11 @@
 import { redirect } from "next/navigation";
-import { SideNav, TabBar } from "@/components/Nav";
-import { getCtx } from "@/lib/session";
-import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { SideNav, TabBar } from "@/components/Nav";
+import { canManage, getCtx } from "@/lib/session";
+import { auth } from "@/lib/auth";
+import { db, schema } from "@/db";
+import { scope } from "@/lib/leads";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const ctx = await getCtx();
@@ -11,16 +14,25 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     if (!s) redirect("/login");
     return (
       <div className="authwrap"><div className="authcard glass">
-        <h1 style={{ fontSize: 22 }}>Waiting for an invite</h1>
-        <p>Your account ({s.user.email}) is not part of the workspace yet. Ask an admin to invite this email, then reload.</p>
+        <h1 style={{ fontSize: 22 }}>No access</h1>
+        <p>Your account ({s.user.email}) is not an active member of this workspace. Ask an admin for an invitation.</p>
       </div></div>
     );
   }
+  const [[o], [u]] = await Promise.all([
+    db.select({ n: sql<number>`count(*)::int` }).from(schema.followUpTask)
+      .innerJoin(schema.lead, eq(schema.lead.id, schema.followUpTask.leadId))
+      .where(and(scope(ctx), isNull(schema.lead.closedAt), eq(schema.followUpTask.status, "pending"), sql`${schema.followUpTask.dueAt} < now()`)),
+    db.select({ n: sql<number>`count(*)::int` }).from(schema.notification)
+      .where(and(eq(schema.notification.memberId, ctx.memberId), isNull(schema.notification.readAt))),
+  ]);
+  const counts = { overdue: o.n, unread: u.n };
+  const mgr = canManage(ctx);
   return (
     <div className="shell">
-      <SideNav name={ctx.name} role={ctx.role} />
+      <SideNav name={ctx.name} role={ctx.role} isManager={mgr} counts={counts} />
       <main className="main">{children}</main>
-      <TabBar />
+      <TabBar isManager={mgr} counts={counts} />
     </div>
   );
 }

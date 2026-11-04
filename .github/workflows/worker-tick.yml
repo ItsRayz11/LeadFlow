@@ -1,0 +1,20 @@
+# Calls the reminder worker every 5 minutes. GitHub's schedule is best-effort (it can run late),
+# so treat it as a free stand-in for a real minute-level scheduler.
+# Required repository secrets: APP_URL (e.g. https://leadflow-five-beta.vercel.app) and CRON_SECRET.
+name: worker-tick
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Call worker
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$APP_URL" && test -n "$CRON_SECRET" || { echo "APP_URL and CRON_SECRET secrets are required"; exit 1; }
+          curl --fail --silent --show-error --retry 3 --retry-delay 5 -X POST "$APP_URL/api/worker/tick" -H "Authorization: Bearer $CRON_SECRET"

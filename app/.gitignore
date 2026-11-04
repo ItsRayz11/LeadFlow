@@ -44,3 +44,10 @@ next-env.d.ts
 
 .vercel
 .env*
+
+# test artifacts
+/e2e/.admin.json
+/e2e/screens
+/e2e/results.json
+/test-results
+/playwright-report

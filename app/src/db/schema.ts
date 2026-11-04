@@ -66,7 +66,11 @@ export const taskStatusEnum = pgEnum("task_status", ["pending", "completed", "re
 export const activityTypeEnum = pgEnum("activity_type", [
   "imported", "created", "assigned", "status_changed", "contact_attempt", "contacted", "no_answer",
   "note", "followup_completed", "followup_rescheduled", "milestone", "closed", "reopened",
-  "escalated", "merged", "synced",
+  "escalated", "merged", "synced", "edited", "scheduled", "reassigned", "reopened_task", "invited", "followup_missed",
+]);
+export const channelEnum = pgEnum("contact_channel", ["call", "whatsapp", "email", "sms", "other"]);
+export const interactionOutcomeEnum = pgEnum("interaction_outcome", [
+  "reached", "no_answer", "interested", "callback_requested", "converted", "not_interested", "dropped",
 ]);
 export const priorityEnum = pgEnum("priority", ["low", "normal", "high", "urgent"]);
 export const syncModeEnum = pgEnum("sync_mode", ["read_only", "two_way"]);
@@ -77,6 +81,8 @@ export const workspace = pgTable("workspace", {
   id: id(),
   name: text("name").notNull(),
   timezone: text("timezone").notNull().default("Asia/Karachi"),
+  // Always true. The unique constraint guarantees at most one workspace row, so concurrent first-admin bootstrap cannot create two.
+  singleton: boolean("singleton").notNull().default(true).unique(),
   // { h24, h48, escalateAfterMinutes, advanceReminderMinutes, quietHours, autoAssign }
   settings: jsonb("settings").notNull().default({}),
   createdAt: ts("created_at").notNull().defaultNow(),
@@ -90,6 +96,7 @@ export const workspaceMember = pgTable("workspace_member", {
   displayName: text("display_name").notNull(),
   active: boolean("active").notNull().default(true),
   capacity: integer("capacity"),
+  deactivatedAt: ts("deactivated_at"),
   createdAt: ts("created_at").notNull().defaultNow(),
 }, (t) => [uniqueIndex("wm_ws_user_uq").on(t.workspaceId, t.userId)]);
 
@@ -215,6 +222,8 @@ export const leadActivity = pgTable("lead_activity", {
   type: activityTypeEnum("type").notNull(),
   actorId: text("actor_id"), // null = system
   summary: text("summary"),
+  channel: channelEnum("channel"),
+  outcome: interactionOutcomeEnum("outcome"),
   data: jsonb("data").notNull().default({}),
   idempotencyKey: text("idempotency_key"), // prevents duplicate rows on retries
   occurredAt: ts("occurred_at").notNull().defaultNow(),
@@ -239,6 +248,14 @@ export const followUpTask = pgTable("follow_up_task", {
   completedAt: ts("completed_at"),
   completedBy: text("completed_by"),
   result: text("result"),
+  priority: priorityEnum("priority").notNull().default("normal"),
+  attempts: integer("attempts").notNull().default(0),
+  notes: text("notes"),
+  channel: channelEnum("channel"),
+  outcome: interactionOutcomeEnum("outcome"),
+  anchorAt: ts("anchor_at"), // recorded event this due time was computed from
+  createdBy: text("created_by"),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
   // Makes ingest/cron idempotent: one task per lead+step+slot
   dedupeKey: text("dedupe_key").notNull(),
   createdAt: ts("created_at").notNull().defaultNow(),
@@ -247,6 +264,8 @@ export const followUpTask = pgTable("follow_up_task", {
   index("task_owner_due_idx").on(t.ownerId, t.status, t.dueAt),
   index("task_ws_due_idx").on(t.workspaceId, t.status, t.dueAt),
   index("task_lead_idx").on(t.leadId),
+  // A lead can have at most one open task. This is the core duplicate-task guard.
+  uniqueIndex("task_one_pending_uq").on(t.leadId).where(sql`${t.status} = 'pending'`),
 ]);
 
 export const notification = pgTable("notification", {
@@ -294,5 +313,33 @@ export const invite = pgTable("invite", {
   email: text("email").notNull(),
   role: roleEnum("role").notNull().default("bd"),
   displayName: text("display_name").notNull(),
+  tokenHash: text("token_hash").notNull(), // sha256 of the one-time token. The token itself is never stored.
+  expiresAt: ts("expires_at").notNull(),
+  acceptedAt: ts("accepted_at"),
+  revokedAt: ts("revoked_at"),
+  invitedBy: text("invited_by"),
   createdAt: ts("created_at").notNull().defaultNow(),
-}, (t) => [uniqueIndex("invite_ws_email_uq").on(t.workspaceId, t.email)]);
+}, (t) => [index("invite_email_idx").on(t.email), uniqueIndex("invite_hash_uq").on(t.tokenHash)]);
+
+// Admin-controlled mapping from names found in the spreadsheet (e.g. "Bawar", "Badar") to team members.
+export const identityAlias = pgTable("identity_alias", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspace.id, { onDelete: "cascade" }),
+  alias: text("alias").notNull(),
+  memberId: uuid("member_id").references(() => workspaceMember.id, { onDelete: "set null" }), // null = deliberately unmapped
+  createdBy: text("created_by"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+}, (t) => [uniqueIndex("alias_ws_alias_uq").on(t.workspaceId, sql`lower(${t.alias})`)]);
+
+// One row per (notification, channel). Status stays "pending" until a worker really processes it.
+export const notificationDelivery = pgTable("notification_delivery", {
+  id: id(),
+  notificationId: uuid("notification_id").notNull().references(() => notification.id, { onDelete: "cascade" }),
+  channel: text("channel").notNull(), // in_app | webhook | push | email
+  status: text("status").notNull().default("pending"), // pending | sent | failed | skipped
+  attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: ts("next_attempt_at").notNull().defaultNow(),
+  lastError: text("last_error"),
+  sentAt: ts("sent_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+}, (t) => [uniqueIndex("delivery_uq").on(t.notificationId, t.channel), index("delivery_due_idx").on(t.status, t.nextAttemptAt)]);

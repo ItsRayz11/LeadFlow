@@ -15,6 +15,20 @@
       "when": 1793802460659,
       "tag": "0001_breezy_ben_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793803901702,
+      "tag": "0002_quick_machine_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793804255949,
+      "tag": "0003_mixed_black_knight",
+      "breakpoints": true
     }
   ]
 }

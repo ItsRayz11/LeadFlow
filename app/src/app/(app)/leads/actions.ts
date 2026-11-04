@@ -85,5 +85,5 @@ export async function listOwners() {
   if (!canManage(c)) return [];
   return db.select({ id: schema.workspaceMember.id, name: schema.workspaceMember.displayName })
     .from(schema.workspaceMember)
-    .where(and(eq(schema.workspaceMember.workspaceId, c.workspaceId), eq(schema.workspaceMember.active, true)));
+    .where(and(eq(schema.workspaceMember.workspaceId, c.workspaceId), eq(schema.workspaceMember.active, true), sql`${schema.workspaceMember.role} <> 'viewer'`));
 }

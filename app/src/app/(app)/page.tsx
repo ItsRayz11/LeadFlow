@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { requireCtx } from "@/lib/session";
 import { overviewMetrics } from "@/lib/leads";
+import { sweepSoon } from "@/lib/sweep";
+import { SignOutButton } from "@/components/Nav";
 
 export const dynamic = "force-dynamic";
 
 export default async function Overview() {
   const c = await requireCtx();
+  sweepSoon(c.workspaceId);
   const m = await overviewMetrics(c);
   const pct = m.newYesterday ? Math.round(((m.newToday - m.newYesterday) / m.newYesterday) * 100) : null;
   const empty = m.active === 0 && m.newToday === 0;
@@ -23,7 +26,7 @@ export default async function Overview() {
           <h1>Good day, {c.name}</h1>
           <p>{new Date().toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", timeZone: c.tz })} · {c.tz}</p>
         </div>
-        <Link className="btn" href="/leads/new" style={{ display: "inline-flex", alignItems: "center" }}>Add lead</Link>
+        <div className="acts"><Link className="btn" href="/leads/new" style={{ display: "inline-flex", alignItems: "center" }}>Add lead</Link><SignOutButton /></div>
       </header>
 
       {empty && (
@@ -35,8 +38,8 @@ export default async function Overview() {
       )}
 
       <section className="metrics" aria-label="Key numbers">
-        <Tile href="/leads?seg=overdue" cls="urgent" label="Overdue follow-ups" v={m.overdue} sub={m.overdue ? "Stay visible until resolved" : "All clear"} />
-        <Tile href="/leads?seg=active" cls="due" label="Due today" v={m.dueToday} sub="Still ahead today" />
+        <Tile href="/followups?view=overdue" cls="urgent" label="Overdue follow-ups" v={m.overdue} sub={m.overdue ? "Stay visible until resolved" : "All clear"} />
+        <Tile href="/followups?view=today" cls="due" label="Due today" v={m.dueToday} sub="Still ahead today" />
         <Tile href="/leads?seg=unassigned" label="Unassigned" v={m.unassigned} sub="Need a BD" />
         <Tile href="/leads?seg=new_today" label="New today" v={m.newToday} sub={pct == null ? `Yesterday: ${m.newYesterday}` : `${pct >= 0 ? "▲ +" : "▼ "}${pct}% vs yesterday (${m.newYesterday})`} />
         <Tile href="/leads" label="Contacted today" v={m.contactedToday} sub="Confirmed by a BD" />

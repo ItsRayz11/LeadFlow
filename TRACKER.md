@@ -39,27 +39,27 @@ Notes
 
 ## Phase 2 — Core CRM
 - [x] Project scaffold + env handling (CI pending)
-- [~] Auth + roles: Better Auth sign-in, first user = admin, invite-only after; invite UI pending
+- [x] Auth + roles: Better Auth; first-admin bootstrap needs OWNER_EMAIL + SETUP_TOKEN; invite-only after; invitations, revoke, deactivate, roles built
 - [x] Migrations + indexes
 - [~] Lead list with segments + search (real DB); pagination/filters by owner & source pending
-- [~] Lead profile read-only; actions pending
+- [x] Lead profile interactive: edit, assign, stage, contact log, notes, milestones, close/reopen, timeline
 - [ ] Lead status / follow-up step / milestones / outcomes as separate fields
-- [ ] Assignment: manual, bulk, reassign w/ reason, backup owner
-- [ ] Activity timeline + audit log
+- [~] Assignment: manual, bulk, reassign with reason done; backup owner pending
+- [x] Activity timeline + audit log
 - [ ] Dedup detection + admin merge workflow
 
 ## Phase 3 — Follow-up Engine (highest priority)
-- [ ] FollowUpTask + Reminder model, idempotency keys
-- [ ] Configurable intervals (24h / 48h / final)
-- [ ] Queues: Due Now, Today, Overdue, Upcoming, Completed, No Response, Unassigned, All
-- [ ] Actions: Contacted, No Answer, Interested, Converted, Reschedule, Note, Assign, Close, Reopen
-- [ ] Persistent overdue state + missed history
-- [ ] In-app notifications
-- [ ] Manager escalation after delay
-- [ ] Quiet hours + timezones
-- [ ] Daily manager report
-- [ ] Duplicate-reminder prevention tests
-- [ ] PWA push (optional)
+- [x] FollowUpTask + Reminder model, idempotency keys
+- [x] Configurable intervals (24h / 48h / final)
+- [x] Queues: Due Now, Today, Overdue, Upcoming, Completed, No Response, Unassigned, All
+- [x] Actions: Contacted, No Answer, Interested, Converted, Reschedule, Note, Assign, Close, Reopen
+- [x] Persistent overdue state + missed history
+- [x] In-app notifications
+- [x] Manager escalation after delay
+- [~] Quiet hours + timezones (settings and delivery deferral done; per-user zones pending)
+- [~] Daily manager report (team page shows overdue by owner; scheduled report pending)
+- [x] Duplicate-reminder prevention tests
+- [ ] PWA push (optional): webhook channel exists as the pluggable external path
 
 ## Phase 4 — Google Sheets Integration
 - [ ] OAuth (minimum scopes) + encrypted token storage
@@ -91,10 +91,10 @@ Notes
 - [ ] AI safeguards + on/off setting
 
 ## Phase 7 — Verification
-- [ ] Unit + integration tests
-- [ ] E2E tests
-- [ ] Timezone boundary tests
-- [ ] Permission tests
+- [x] Unit + integration tests (15 unit, 7 DB integration)
+- [x] E2E tests (31 flow + 50 responsive, Playwright, staging branch)
+- [x] Timezone boundary tests
+- [x] Permission tests
 - [ ] Responsive review at 360 / 390 / 768 / 1024 / 1440
 - [ ] Security review (secrets, endpoints, RLS/authz)
 - [ ] Performance pass
@@ -123,4 +123,4 @@ Notes
 | 2026-11-04 | Spec saved; tracker created. |
 | 2026-11-04 | Next.js scaffold, Neon project + full schema migrated, local git commit. GitHub remote creation was blocked, awaiting user. |
 | 2026-11-04 | Pushed to GitHub, Vercel root=app, env vars set, auto-deploy on. Added login, workspace bootstrap, overview metrics, lead list, add-lead with duplicate check, lead profile (read-only). |
-
+| 2026-11-04 | Phase 3 follow-up engine, follow-up dashboard, invitations and team, worker, interactive lead page. Tests green on staging. Production migration and deploy waiting for approval. |
