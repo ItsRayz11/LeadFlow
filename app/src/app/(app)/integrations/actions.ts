@@ -1,12 +1,12 @@
 "use server";
 import { revalidatePath } from "next/cache";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/db";
 import { requireCtx } from "@/lib/session";
 import { fromZonedTime } from "date-fns-tz";
 import { DEFAULT_COLUMN_MAP, parseSheetUrl, parseWorksheet } from "@/lib/sheetparse";
-import { PermanentSyncError, fetchWorksheetCsv, syncConnection } from "@/lib/sheetsync";
+import { BudgetError, PermanentSyncError, fetchTabList, fetchWorksheetCsv, syncConnection } from "@/lib/sheetsync";
 import { linkAlias, resolveFieldConflict, saveMapping } from "@/lib/sheetops";
 import type { R } from "../actions";
 
@@ -25,27 +25,75 @@ const fail = (e: unknown): R => {
 };
 const ok = (message: string): R => { revalidatePath("/integrations"); revalidatePath("/", "layout"); return { ok: true, message }; };
 
+const MAX_TABS = 12;
+
+/** Connects either one tab ("tab") or every tab of the spreadsheet ("all"). Tabs without the expected columns are reported, never half-connected. */
 export async function connectSheetAction(_p: R, fd: FormData): Promise<R> {
-  const p = z.object({ url: z.string().max(500) }).safeParse(Object.fromEntries(fd));
+  const p = z.object({ url: z.string().max(500), scope: z.enum(["tab", "all"]).default("tab") }).safeParse(Object.fromEntries(fd));
   const parsed = p.success ? parseSheetUrl(p.data.url) : null;
-  if (!parsed?.gid) return { error: "Paste the full Google Sheets link of the worksheet tab (it must contain gid=…)." };
+  if (!p.success || !parsed) return { error: "Paste a Google Sheets link (https://docs.google.com/spreadsheets/d/…)." };
+  const scope = p.data.scope;
+  if (scope === "tab" && !parsed.gid) return { error: "To track one tab, open that tab and paste the full link; it must contain gid=…" };
+  const deadline = Date.now() + 50_000;
   try {
     const c = await manager();
-    // Prove the sheet is readable before saving anything.
-    const table = await fetchWorksheetCsv(parsed.spreadsheetId, parsed.gid);
-    if (!table.length) return { error: "That worksheet is empty." };
-    const check = parseWorksheet(table, DEFAULT_COLUMN_MAP, c.tz, fromZonedTime);
-    if (check.missingColumns.length) return { error: `This tab is missing expected columns: ${check.missingColumns.join(", ")}. Nothing was connected.` };
+    // Which tabs: the one in the link, or everything the spreadsheet lists.
+    let tabs: { gid: string; title: string }[];
+    if (scope === "all") {
+      tabs = await fetchTabList(parsed.spreadsheetId);
+      if (tabs.length > MAX_TABS) return { error: `This spreadsheet has ${tabs.length} tabs; at most ${MAX_TABS} can be connected at once. Connect the ones you need one at a time.` };
+    } else {
+      const known = await fetchTabList(parsed.spreadsheetId).catch(() => []);
+      tabs = [{ gid: parsed.gid!, title: known.find((t) => t.gid === parsed.gid)?.title ?? `Worksheet ${parsed.gid}` }];
+    }
+    // Prove each tab is readable and has the expected columns before saving anything.
+    const good: typeof tabs = [], problems: string[] = [];
+    for (const t of tabs) {
+      try {
+        const table = await fetchWorksheetCsv(parsed.spreadsheetId, t.gid, deadline);
+        if (!table.length) { problems.push(`“${t.title}” is empty`); continue; }
+        const check = parseWorksheet(table, DEFAULT_COLUMN_MAP, c.tz, fromZonedTime);
+        if (check.missingColumns.length) problems.push(`“${t.title}” is missing ${check.missingColumns.join(", ")}`);
+        else good.push(t);
+      } catch (e) {
+        if (scope === "tab" || e instanceof BudgetError) throw e;
+        problems.push(`“${t.title}” could not be read`);
+      }
+    }
+    if (!good.length) return { error: `Nothing was connected. ${problems.join("; ") || "No tabs found."}.` };
     const [conn] = await db.insert(schema.spreadsheetConnection).values({
       workspaceId: c.workspaceId, spreadsheetId: parsed.spreadsheetId, title: "Google Sheet", mode: "read_only",
     }).onConflictDoUpdate({ target: [schema.spreadsheetConnection.workspaceId, schema.spreadsheetConnection.spreadsheetId], set: { healthy: true, lastError: null } })
       .returning({ id: schema.spreadsheetConnection.id });
-    await db.insert(schema.worksheetMapping).values({
-      connectionId: conn.id, sheetGid: parsed.gid, sheetTitle: `Worksheet ${parsed.gid}`, enabled: true, headerRow: 1,
-      columnMap: DEFAULT_COLUMN_MAP, identityStrategy: "source_id_column",
-    }).onConflictDoNothing();
-    await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.connect", entity: "spreadsheet_connection", entityId: conn.id, data: { gid: parsed.gid } });
-    return ok("Connected. Review the column mapping below, then confirm to import.");
+    for (const t of good) {
+      // A tab connected earlier keeps its mapping; one that was switched off is switched back on and must be confirmed again.
+      await db.insert(schema.worksheetMapping).values({
+        connectionId: conn.id, sheetGid: t.gid, sheetTitle: t.title, enabled: true, headerRow: 1,
+        columnMap: DEFAULT_COLUMN_MAP, identityStrategy: "source_id_column",
+      }).onConflictDoUpdate({ target: [schema.worksheetMapping.connectionId, schema.worksheetMapping.sheetGid], set: { enabled: true, sheetTitle: t.title } });
+    }
+    await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.connect", entity: "spreadsheet_connection", entityId: conn.id, data: { scope, gids: good.map((t) => t.gid) } });
+    const skipped = problems.length ? ` Not connected: ${problems.join("; ")}.` : "";
+    return ok(`Connected ${good.length} tab${good.length === 1 ? "" : "s"}. Review the column mapping below, then confirm to import.${skipped}`);
+  } catch (e) {
+    if (e instanceof BudgetError) return { error: "Reading the tabs took too long. Nothing was connected; try again or connect fewer tabs." };
+    return fail(e);
+  }
+}
+
+/** Stops tracking one tab. Leads already imported stay in the CRM; other tabs are untouched. */
+export async function stopTabAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ mappingId: z.string().uuid() }).safeParse(Object.fromEntries(fd));
+  if (!p.success) return { error: "Invalid request." };
+  try {
+    const c = await manager();
+    const [row] = await db.select({ id: schema.worksheetMapping.id }).from(schema.worksheetMapping)
+      .innerJoin(schema.spreadsheetConnection, eq(schema.spreadsheetConnection.id, schema.worksheetMapping.connectionId))
+      .where(and(eq(schema.worksheetMapping.id, p.data.mappingId), eq(schema.spreadsheetConnection.workspaceId, c.workspaceId)));
+    if (!row) return { error: "Worksheet not found." };
+    await db.update(schema.worksheetMapping).set({ enabled: false, confirmedAt: null }).where(eq(schema.worksheetMapping.id, row.id));
+    await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.stop_tab", entity: "worksheet_mapping", entityId: row.id, data: {} });
+    return ok("Stopped. Leads already imported from this tab stay in the CRM.");
   } catch (e) { return fail(e); }
 }
 
@@ -60,6 +108,24 @@ export async function confirmMappingAction(_p: R, fd: FormData): Promise<R> {
     if (!row) return { error: "Worksheet not found." };
     await db.update(schema.worksheetMapping).set({ confirmedAt: new Date(), enabled: true }).where(eq(schema.worksheetMapping.id, row.m.id));
     const s = await syncConnection(row.m.connectionId, "initial", c.userId, Date.now() + 50_000);
+    if (!s.ran) return { error: "A sync is already running for this sheet. Wait a minute and check the history below." };
+    if (s.partial) return ok(`Imported ${s.created} leads so far. It did not finish in the time allowed and will continue automatically on the next run.`);
+    return ok(`Imported ${s.created} new leads (${s.assigned} assigned from the owner column, ${s.skipped} rows skipped).`);
+  } catch (e) { return fail(e); }
+}
+
+/** Confirms every tab of a connection that still waits for confirmation, then imports once. */
+export async function confirmAllAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ connectionId: z.string().uuid() }).safeParse(Object.fromEntries(fd));
+  if (!p.success) return { error: "Invalid request." };
+  try {
+    const c = await manager();
+    const [conn] = await db.select({ id: schema.spreadsheetConnection.id }).from(schema.spreadsheetConnection)
+      .where(and(eq(schema.spreadsheetConnection.id, p.data.connectionId), eq(schema.spreadsheetConnection.workspaceId, c.workspaceId)));
+    if (!conn) return { error: "Connection not found." };
+    await db.update(schema.worksheetMapping).set({ confirmedAt: new Date() })
+      .where(and(eq(schema.worksheetMapping.connectionId, conn.id), eq(schema.worksheetMapping.enabled, true), isNull(schema.worksheetMapping.confirmedAt)));
+    const s = await syncConnection(conn.id, "initial", c.userId, Date.now() + 50_000);
     if (!s.ran) return { error: "A sync is already running for this sheet. Wait a minute and check the history below." };
     if (s.partial) return ok(`Imported ${s.created} leads so far. It did not finish in the time allowed and will continue automatically on the next run.`);
     return ok(`Imported ${s.created} new leads (${s.assigned} assigned from the owner column, ${s.skipped} rows skipped).`);

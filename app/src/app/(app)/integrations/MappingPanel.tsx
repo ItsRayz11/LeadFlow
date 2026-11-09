@@ -3,7 +3,7 @@ import { previewWorksheet } from "@/lib/sheetops";
 import { DEFAULT_COLUMN_MAP, type ColumnMap } from "@/lib/sheetparse";
 import { confirmMappingAction, saveMappingAction } from "./actions";
 
-type Mapping = { id: string; sheetGid: string; headerRow: number; columnMap: unknown; confirmedAt: Date | null };
+type Mapping = { id: string; sheetGid: string; sheetTitle: string; headerRow: number; columnMap: unknown; confirmedAt: Date | null };
 
 function Pick({ name, label, value, headers, optional }: { name: string; label: string; value?: string; headers: string[]; optional?: boolean }) {
   return (
@@ -22,7 +22,7 @@ export async function MappingPanel({ spreadsheetId, m, tz, show }: { spreadsheet
     // Reading the sheet on every page view is slow and can hit Google rate limits, so a confirmed mapping previews only on request.
     return (
       <div style={{ marginTop: 12 }}>
-        <h3>Worksheet {m.sheetGid} <span className="pill ok">Mapped</span></h3>
+        <h3>{m.sheetTitle} <span className="pill ok">Mapped</span></h3>
         <p className="sub">Each lead is identified by the “{map.externalId}” column, never by its row number.</p>
         <a className="chip" href={`/integrations?preview=${m.id}`}>Preview and change the mapping</a>
       </div>
@@ -34,7 +34,7 @@ export async function MappingPanel({ spreadsheetId, m, tz, show }: { spreadsheet
 
   return (
     <div style={{ marginTop: 12 }}>
-      <h3>Worksheet {m.sheetGid} {m.confirmedAt ? <span className="pill ok">Mapped</span> : <span className="pill warn">Not confirmed</span>}</h3>
+      <h3>{m.sheetTitle} {m.confirmedAt ? <span className="pill ok">Mapped</span> : <span className="pill warn">Not confirmed</span>}</h3>
       <p className="sub">Each lead is identified by the “{map.externalId}” column, never by its row number.</p>
       {err && <p className="err" role="alert">{err}</p>}
       {pv && (

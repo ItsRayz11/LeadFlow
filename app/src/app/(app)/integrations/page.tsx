@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { db, schema } from "@/db";
 import { canManage, requireCtx } from "@/lib/session";
 import { ActionForm, Submit } from "@/components/ActionForm";
-import { aliasAction, conflictAction, connectSheetAction, syncNowAction } from "./actions";
+import { aliasAction, conflictAction, confirmAllAction, connectSheetAction, stopTabAction, syncNowAction } from "./actions";
 import { MappingPanel } from "./MappingPanel";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +32,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
 
   const cards = await Promise.all(conns.map(async (cn) => ({
     cn,
-    maps: await db.select().from(schema.worksheetMapping).where(eq(schema.worksheetMapping.connectionId, cn.id)),
+    maps: await db.select().from(schema.worksheetMapping).where(and(eq(schema.worksheetMapping.connectionId, cn.id), eq(schema.worksheetMapping.enabled, true))).orderBy(schema.worksheetMapping.sheetTitle),
     jobs: await db.select().from(schema.syncJob).where(eq(schema.syncJob.connectionId, cn.id)).orderBy(desc(schema.syncJob.startedAt)).limit(8),
   })));
 
@@ -49,7 +49,19 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             <dt>Access</dt><dd>Link sharing, view only. Google sign-in replaces this once credentials are added.</dd>
             {cn.lastError && <><dt>Last error</dt><dd className="err">{cn.lastError}</dd></>}
           </dl>
-          {maps.map((m) => <MappingPanel key={m.id} spreadsheetId={cn.spreadsheetId} m={m} tz={c.tz} show={!m.confirmedAt || previewId === m.id} />)}
+          {maps.length > 1 && maps.some((m) => !m.confirmedAt) && (
+            <ActionForm action={confirmAllAction}>
+              <input type="hidden" name="connectionId" value={cn.id} />
+              <Submit pendingText="Importing">Confirm all {maps.filter((m) => !m.confirmedAt).length} tabs and import</Submit>
+              <p className="sub">Uses the default columns for every tab shown. Open a tab&apos;s preview first if one needs different columns.</p>
+            </ActionForm>
+          )}
+          {maps.map((m) => (
+            <div key={m.id}>
+              <MappingPanel spreadsheetId={cn.spreadsheetId} m={m} tz={c.tz} show={!m.confirmedAt || previewId === m.id} />
+              <ActionForm action={stopTabAction}><input type="hidden" name="mappingId" value={m.id} /><Submit className="btn ghost">Stop tracking this tab</Submit></ActionForm>
+            </div>
+          ))}
           {maps.some((m) => m.confirmedAt) && (
             <ActionForm action={syncNowAction}><input type="hidden" name="connectionId" value={cn.id} /><Submit pendingText="Syncing">Sync now</Submit></ActionForm>
           )}
@@ -106,9 +118,14 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       )}
 
       <section className="panel glass">
-        <h2>Connect a worksheet</h2>
+        <h2>Connect a sheet</h2>
         <ActionForm action={connectSheetAction}>
-          <label className="field"><span>Google Sheets link (open the tab and copy the address bar)</span>
+          <fieldset className="field" style={{ border: 0, padding: 0 }}>
+            <legend>What should be tracked?</legend>
+            <label style={{ display: "block" }}><input type="radio" name="scope" value="all" defaultChecked /> The whole spreadsheet: every tab, with owners matched to your team</label>
+            <label style={{ display: "block" }}><input type="radio" name="scope" value="tab" /> Just one tab: open that tab first, then paste its link</label>
+          </fieldset>
+          <label className="field"><span>Google Sheets link (copy the address bar; for one tab it must end in gid=…)</span>
             <input type="url" name="url" placeholder="https://docs.google.com/spreadsheets/d/…/edit?gid=…" required /></label>
           <Submit pendingText="Checking">Connect</Submit>
         </ActionForm>

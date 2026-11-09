@@ -6,7 +6,7 @@ import { db, schema } from "@/db";
 import { dbTx } from "@/db/tx";
 import { notify } from "@/lib/notify";
 import { dueFor, readSettings } from "@/lib/schedule";
-import { DEFAULT_COLUMN_MAP, parseCsv, parseWorksheet, type ColumnMap, type ParsedRow } from "@/lib/sheetparse";
+import { DEFAULT_COLUMN_MAP, parseCsv, parseTabList, parseWorksheet, type ColumnMap, type ParsedRow } from "@/lib/sheetparse";
 
 const L = schema.lead;
 const CHUNK = 200;
@@ -52,6 +52,18 @@ export async function fetchWorksheetCsv(spreadsheetId: string, gid: string, dead
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error("Google could not be reached.");
+}
+
+/** Lists the tabs of a link-shared spreadsheet (needs no credentials). Throws a clear error when the sheet is private or the list cannot be found. */
+export async function fetchTabList(spreadsheetId: string): Promise<{ gid: string; title: string }[]> {
+  const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/htmlview`;
+  let res: Response;
+  try { res = await fetch(url, { signal: AbortSignal.timeout(15_000), redirect: "follow", cache: "no-store", headers: { "user-agent": "Mozilla/5.0" } }); }
+  catch { throw new Error("Google could not be reached. Try again."); }
+  const html = res.ok ? (await res.text()).slice(0, 3 * 1024 * 1024) : "";
+  const tabs = parseTabList(html);
+  if (!tabs.length) throw new PermanentSyncError("Could not list the tabs of this sheet. Make sure it is shared as “anyone with the link can view”, or connect one tab at a time.");
+  return tabs;
 }
 
 export type SyncSummary = {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fromZonedTime } from "date-fns-tz";
-import { DEFAULT_COLUMN_MAP, cleanAlias, parseCsv, parseSheetDate, parseSheetUrl, parseWorksheet } from "./sheetparse";
+import { DEFAULT_COLUMN_MAP, cleanAlias, parseCsv, parseSheetDate, parseSheetUrl, parseTabList, parseWorksheet } from "./sheetparse";
 
 const TZ = "Asia/Karachi";
 const csv = [
@@ -18,6 +18,16 @@ describe("csv", () => {
     expect(parseCsv('a,"b,c","d\ne"\n1,2,3')).toEqual([["a", "b,c", "d\ne"], ["1", "2", "3"]]);
     expect(parseCsv('a,"say ""hi"""\r\nx,y')).toEqual([["a", 'say "hi"'], ["x", "y"]]);
   });
+});
+
+describe("tab list", () => {
+  const html = String.raw`<script>items.push({name: "Class Data", pageUrl: "https:\/\/docs.google.com\/spreadsheets\/d\/ABC\/htmlview\/sheet?headers\x3dtrue&gid=0", gid: "0",initialSheet: ("0" == gid)});
+items.push({name: "Leads \x26 \"Ads\"", pageUrl: "https:\/\/x\/y?gid\x3d123", gid: "123",initialSheet: false});
+items.push({name: "Class Data", pageUrl: "https:\/\/x", gid: "0"});</script>`;
+  it("reads names and ids, decodes escapes and ignores repeats", () => {
+    expect(parseTabList(html)).toEqual([{ gid: "0", title: "Class Data" }, { gid: "123", title: 'Leads & "Ads"' }]);
+  });
+  it("returns nothing for a page without a tab list", () => expect(parseTabList("<html>Sign in</html>")).toEqual([]));
 });
 
 describe("sheet url", () => {

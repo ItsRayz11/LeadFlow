@@ -31,6 +31,23 @@ export function parseSheetUrl(input: string): { spreadsheetId: string; gid: stri
   return { spreadsheetId: m[1], gid };
 }
 
+/** Reads the tab names and ids out of a link-shared sheet's public "htmlview" page. Returns [] when the page lists none (for example a private sheet). */
+export function parseTabList(html: string): { gid: string; title: string }[] {
+  const unescape = (s: string) =>
+    s.replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+      .replace(/\\(.)/g, "$1");
+  const out: { gid: string; title: string }[] = [];
+  const seen = new Set<string>();
+  const re = /items\.push\(\{name:\s*"((?:[^"\\]|\\.)*)",\s*pageUrl:\s*"(?:[^"\\]|\\.)*",\s*gid:\s*"(\d+)"/g;
+  for (const m of html.matchAll(re)) {
+    if (seen.has(m[2])) continue;
+    seen.add(m[2]);
+    out.push({ gid: m[2], title: unescape(m[1]).trim() || `Worksheet ${m[2]}` });
+  }
+  return out;
+}
+
 /** RFC 4180 CSV: quoted fields, escaped quotes, and newlines inside quotes. */
 export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
