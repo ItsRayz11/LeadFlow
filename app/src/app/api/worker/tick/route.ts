@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sweep } from "@/lib/sweep";
+import { syncAllConnections } from "@/lib/sheetsync";
 import { safeEqual } from "@/lib/tokens";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,9 @@ async function handle(req: Request) {
   if (!secret || !given || !safeEqual(given, secret)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
     const result = await sweep();
-    return NextResponse.json({ ok: true, at: new Date().toISOString(), ...result });
+    // A failing sheet must never block reminders, so sync errors are reported, not thrown.
+    const sheets = await syncAllConnections().catch(() => ({ connections: 0, created: 0, failed: 1 }));
+    return NextResponse.json({ ok: true, at: new Date().toISOString(), ...result, sheets });
   } catch (e) {
     console.error("worker tick failed", e);
     return NextResponse.json({ ok: false, error: "Worker failed" }, { status: 500 });
