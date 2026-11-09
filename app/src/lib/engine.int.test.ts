@@ -70,7 +70,8 @@ d("follow-up engine (database)", () => {
     ]);
     const t = await tasks(l.id);
     expect(t.filter((x) => x.status === "pending")).toHaveLength(1);
-    expect(t.map((x) => x.step)).toEqual(["contact_started", "h24", "h48"]); // each request advanced one step, in order
+    // Each request advanced one step. createdAt is the transaction start time, so two overlapping transactions can swap it: compare as a set.
+    expect(t.map((x) => x.step).sort()).toEqual(["contact_started", "h24", "h48"].sort());
     const [row] = await db.select().from(schema.lead).where(eq(schema.lead.id, l.id));
     expect(row.followUpAttempts).toBe(2);
     expect(row.version).toBeGreaterThanOrEqual(3);

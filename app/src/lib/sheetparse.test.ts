@@ -29,6 +29,15 @@ describe("sheet url", () => {
   it("cleans owner names", () => expect(cleanAlias("📄 Fazal")).toBe("Fazal"));
 });
 
+describe("ids that lost digits", () => {
+  it("refuses scientific-notation ids instead of letting leads collide", () => {
+    const t = parseCsv("id,full_name\n1.23E+17,A\n1.23E+17,B\n99,C");
+    const r = parseWorksheet(t, { ...DEFAULT_COLUMN_MAP, contact: [] }, TZ, fromZonedTime);
+    expect(r.rows.map((x) => x.externalId)).toEqual(["99"]);
+    expect(r.skipped[0].count).toBe(2);
+  });
+});
+
 describe("dates with times", () => {
   const f = (v: string) => parseSheetDate(v, TZ, fromZonedTime)?.toISOString() ?? null;
   it("honours AM and PM", () => {

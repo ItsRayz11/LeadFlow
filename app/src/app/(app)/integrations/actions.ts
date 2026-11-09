@@ -1,12 +1,13 @@
 "use server";
 import { revalidatePath } from "next/cache";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/db";
 import { requireCtx } from "@/lib/session";
 import { fromZonedTime } from "date-fns-tz";
 import { DEFAULT_COLUMN_MAP, parseSheetUrl, parseWorksheet } from "@/lib/sheetparse";
 import { PermanentSyncError, fetchWorksheetCsv, syncConnection } from "@/lib/sheetsync";
+import { linkAlias, resolveFieldConflict, saveMapping } from "@/lib/sheetops";
 import type { R } from "../actions";
 
 
@@ -79,20 +80,36 @@ export async function aliasAction(_p: R, fd: FormData): Promise<R> {
   if (!p.success) return { error: "Pick a team member." };
   try {
     const c = await manager();
-    const [m] = await db.select({ id: schema.workspaceMember.id }).from(schema.workspaceMember)
-      .where(and(eq(schema.workspaceMember.id, p.data.memberId), eq(schema.workspaceMember.workspaceId, c.workspaceId), eq(schema.workspaceMember.active, true)));
-    if (!m) return { error: "That team member is not active." };
-    const alias = p.data.alias.trim();
-    const [exists] = await db.select({ id: schema.identityAlias.id, memberId: schema.identityAlias.memberId }).from(schema.identityAlias)
-      .where(and(eq(schema.identityAlias.workspaceId, c.workspaceId), sql`lower(${schema.identityAlias.alias}) = lower(${alias})`)).limit(1);
-    if (exists) await db.update(schema.identityAlias).set({ memberId: m.id, createdBy: c.userId }).where(eq(schema.identityAlias.id, exists.id));
-    else await db.insert(schema.identityAlias).values({ workspaceId: c.workspaceId, alias, memberId: m.id, createdBy: c.userId });
-    // Resolve only this workspace's conflicts (conflicts belong to a workspace through their connection).
-    const mine = db.select({ id: schema.spreadsheetConnection.id }).from(schema.spreadsheetConnection).where(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId));
-    await db.update(schema.syncConflict).set({ resolvedAt: new Date(), resolution: `mapped to member ${m.id}` })
-      .where(and(inArray(schema.syncConflict.connectionId, mine), eq(schema.syncConflict.field, "unmapped_owner"),
-        sql`lower(${schema.syncConflict.sheetValue}) = lower(${alias})`, isNull(schema.syncConflict.resolvedAt)));
-    await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.alias", entity: "identity_alias", data: { alias, memberId: m.id } });
+    await linkAlias(c.workspaceId, c.userId, p.data.alias, p.data.memberId);
     return ok("Saved. Future syncs assign this name to that person. Leads already imported can be assigned from the Leads page.");
+  } catch (e) { return fail(e); }
+}
+
+export async function conflictAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ conflictId: z.string().uuid(), choice: z.enum(["crm", "sheet"]) }).safeParse(Object.fromEntries(fd));
+  if (!p.success) return { error: "Invalid request." };
+  try {
+    const c = await manager();
+    await resolveFieldConflict(c.workspaceId, c.userId, p.data.conflictId, p.data.choice);
+    return ok(p.data.choice === "sheet" ? "Took the sheet's value." : "Kept the CRM value.");
+  } catch (e) { return fail(e); }
+}
+
+export async function saveMappingAction(_p: R, fd: FormData): Promise<R> {
+  const g = (k: string) => String(fd.get(k) ?? "").trim();
+  const p = z.object({
+    mappingId: z.string().uuid(), externalId: z.string().min(1).max(120), name: z.string().min(1).max(120),
+    acquiredAt: z.string().max(120), campaign: z.string().max(120), source: z.string().max(120), owner: z.string().max(120), sheetStatus: z.string().max(120),
+    headerRow: z.coerce.number().int().min(1).max(20),
+  }).safeParse({
+    mappingId: g("mappingId"), externalId: g("externalId"), name: g("name"), acquiredAt: g("acquiredAt"), campaign: g("campaign"),
+    source: g("source"), owner: g("owner"), sheetStatus: g("sheetStatus"), headerRow: g("headerRow") || "1",
+  });
+  if (!p.success) return { error: "Choose the lead id column and the name column." };
+  const contact = fd.getAll("contact").map(String).map((x) => x.trim()).filter(Boolean).slice(0, 10);
+  try {
+    const c = await manager();
+    await saveMapping(c.workspaceId, c.userId, p.data.mappingId, { ...p.data, contact });
+    return ok("Mapping saved. Check the preview, then confirm to import.");
   } catch (e) { return fail(e); }
 }

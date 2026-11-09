@@ -133,6 +133,8 @@ export function parseWorksheet(
     const externalId = first(r, idIx);
     const name = first(r, nameIx);
     if (!externalId) { bump("no lead id"); continue; }
+    // A big numeric id formatted as 1.23E+17 has lost digits; different leads would collide. Refuse instead of guessing.
+    if (/^\d+(\.\d+)?e\+?\d+$/i.test(externalId)) { bump("id in scientific notation (format the id column as plain text)"); continue; }
     if (!name) { bump("no name"); continue; }
     if (seenIds.has(externalId)) { bump("repeated lead id"); continue; }
     seenIds.add(externalId);

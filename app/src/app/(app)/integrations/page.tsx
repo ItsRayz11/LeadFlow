@@ -1,9 +1,10 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { db, schema } from "@/db";
 import { canManage, requireCtx } from "@/lib/session";
 import { ActionForm, Submit } from "@/components/ActionForm";
-import { aliasAction, confirmMappingAction, connectSheetAction, syncNowAction } from "./actions";
+import { aliasAction, conflictAction, connectSheetAction, syncNowAction } from "./actions";
+import { MappingPanel } from "./MappingPanel";
 
 export const dynamic = "force-dynamic";
 // Server actions on this page (import, sync) inherit this limit.
@@ -20,6 +21,11 @@ export default async function IntegrationsPage() {
   const conflicts = await db.select({ v: schema.syncConflict.sheetValue }).from(schema.syncConflict)
     .innerJoin(schema.spreadsheetConnection, eq(schema.spreadsheetConnection.id, schema.syncConflict.connectionId))
     .where(and(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId), isNull(schema.syncConflict.resolvedAt), eq(schema.syncConflict.field, "unmapped_owner")));
+  const diffs = await db.select({ c: schema.syncConflict, lead: schema.lead.name }).from(schema.syncConflict)
+    .innerJoin(schema.spreadsheetConnection, eq(schema.spreadsheetConnection.id, schema.syncConflict.connectionId))
+    .leftJoin(schema.lead, eq(schema.lead.id, schema.syncConflict.leadId))
+    .where(and(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId), isNull(schema.syncConflict.resolvedAt), ne(schema.syncConflict.field, "unmapped_owner")))
+    .orderBy(desc(schema.syncConflict.createdAt)).limit(50);
   const assignable = members.filter((m) => m.role !== "viewer");
   const aliases = [...new Set(conflicts.map((x) => x.v ?? "").filter(Boolean))];
 
@@ -42,18 +48,7 @@ export default async function IntegrationsPage() {
             <dt>Access</dt><dd>Link sharing, view only. Google sign-in replaces this once credentials are added.</dd>
             {cn.lastError && <><dt>Last error</dt><dd className="err">{cn.lastError}</dd></>}
           </dl>
-          {maps.map((m) => {
-            const cm = m.columnMap as { externalId?: string; contact?: string[] };
-            return (
-              <div key={m.id} style={{ marginTop: 12 }}>
-                <h3>Worksheet {m.sheetGid} {m.confirmedAt ? <span className="pill ok">Mapped</span> : <span className="pill warn">Not confirmed</span>}</h3>
-                <p className="sub">Lead identity: the “{cm.externalId}” column, never the row number. Phone and email are read from every column named {(cm.contact ?? []).join(", ")}.</p>
-                {!m.confirmedAt && (
-                  <ActionForm action={confirmMappingAction}><input type="hidden" name="mappingId" value={m.id} /><Submit pendingText="Importing">Confirm mapping and import</Submit></ActionForm>
-                )}
-              </div>
-            );
-          })}
+          {maps.map((m) => <MappingPanel key={m.id} spreadsheetId={cn.spreadsheetId} m={m} tz={c.tz} />)}
           {maps.some((m) => m.confirmedAt) && (
             <ActionForm action={syncNowAction}><input type="hidden" name="connectionId" value={cn.id} /><Submit pendingText="Syncing">Sync now</Submit></ActionForm>
           )}
@@ -70,6 +65,26 @@ export default async function IntegrationsPage() {
           )}
         </section>
       ))}
+
+      {diffs.length > 0 && (
+        <section className="panel glass">
+          <h2>Differences between the sheet and the CRM <span className="pill warn">{diffs.length}</span></h2>
+          <p className="sub">Someone changed these in the CRM, and the sheet now says something else. The CRM value stays until you choose.</p>
+          {diffs.map(({ c: d, lead }) => (
+            <div key={d.id} className="set-row" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
+              <div><strong>{lead ?? "Lead"}</strong> · {d.field}<small>CRM: “{d.crmValue ?? ""}” · Sheet: “{d.sheetValue ?? ""}”</small></div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {(["crm", "sheet"] as const).map((choice) => (
+                  <ActionForm key={choice} action={conflictAction}>
+                    <input type="hidden" name="conflictId" value={d.id} /><input type="hidden" name="choice" value={choice} />
+                    <Submit className={choice === "crm" ? "btn ghost" : "btn"}>{choice === "crm" ? "Keep CRM value" : "Use sheet value"}</Submit>
+                  </ActionForm>
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
 
       {aliases.length > 0 && (
         <section className="panel glass">

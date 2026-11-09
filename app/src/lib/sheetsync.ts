@@ -14,9 +14,9 @@ const MAX_BYTES = 15 * 1024 * 1024;
 const STALE_JOB_MS = 10 * 60_000; // a "running" job older than this was killed (e.g. function timeout)
 const RECENT_LEAD_MS = 7 * 86_400_000; // only fresh leads get an immediate contact task on import
 /** Fields the sheet may update, and only while the CRM value is still the one the sheet last wrote. */
-const SOURCE_FIELDS = ["name", "phoneRaw", "email", "campaign", "source"] as const;
-type SourceField = (typeof SOURCE_FIELDS)[number];
-type Base = Record<SourceField, string | null>;
+export const SOURCE_FIELDS = ["name", "phoneRaw", "email", "campaign", "source"] as const;
+export type SourceField = (typeof SOURCE_FIELDS)[number];
+export type Base = Record<SourceField, string | null>;
 
 const hashRow = (r: ParsedRow) =>
   createHash("sha256").update(JSON.stringify([r.name, r.phoneRaw, r.email, r.campaign, r.source, r.sheetStatus, r.ownerAlias])).digest("hex").slice(0, 32);

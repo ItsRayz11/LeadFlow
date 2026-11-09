@@ -11,7 +11,7 @@ const items: Item[] = [
   { href: "/followups", label: "Follow-ups", Icon: Bell, badge: "overdue" },
   { href: "/team", label: "Team", Icon: UserRound, manager: true },
   { href: "/notifications", label: "Alerts", Icon: BellRing, badge: "unread" },
-  { href: "/insights", label: "Insights", Icon: BarChart3, soon: true },
+  { href: "/insights", label: "Insights", Icon: BarChart3 },
   { href: "/integrations", label: "Integrations", Icon: Sheet, manager: true },
   { href: "/settings", label: "Settings", Icon: Settings, manager: true },
 ];
