@@ -6,6 +6,8 @@ import { ActionForm, Submit } from "@/components/ActionForm";
 import { aliasAction, confirmMappingAction, connectSheetAction, syncNowAction } from "./actions";
 
 export const dynamic = "force-dynamic";
+// Server actions on this page (import, sync) inherit this limit.
+export const maxDuration = 60;
 
 const fmt = (d: Date | null, tz: string) => (d ? d.toLocaleString([], { timeZone: tz }) : "Never");
 

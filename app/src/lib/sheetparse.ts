@@ -68,12 +68,17 @@ export function cleanAlias(v: string): string {
 export function parseSheetDate(v: string, tz: string, toUtc: (local: string, tz: string) => Date): Date | null {
   const t = v.trim();
   if (!t) return null;
-  let m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2}))?/); // M/D/YYYY (Google Sheets, US locale)
-  let y: number, mo: number, d: number, hh = 12, mm = 0;
-  if (m) { mo = +m[1]; d = +m[2]; y = +m[3]; if (m[4]) { hh = +m[4]; mm = +m[5]; } }
-  else if ((m = t.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?/))) { y = +m[1]; mo = +m[2]; d = +m[3]; if (m[4]) { hh = +m[4]; mm = +m[5]; } }
+  const time = String.raw`(?:[ T]+(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])?)?`;
+  let y: number, mo: number, d: number, hh = 12, mm = 0, ap: string | undefined;
+  let m = t.match(new RegExp(String.raw`^(\d{1,2})/(\d{1,2})/(\d{4})` + time)); // M/D/YYYY (Google Sheets, US locale)
+  if (m) { mo = +m[1]; d = +m[2]; y = +m[3]; if (m[4]) { hh = +m[4]; mm = +m[5]; ap = m[6]; } }
+  else if ((m = t.match(new RegExp(String.raw`^(\d{4})-(\d{2})-(\d{2})` + time)))) { y = +m[1]; mo = +m[2]; d = +m[3]; if (m[4]) { hh = +m[4]; mm = +m[5]; ap = m[6]; } }
   else return null;
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  if (ap) {
+    if (hh < 1 || hh > 12) return null;
+    hh = (hh % 12) + (ap.toLowerCase() === "pm" ? 12 : 0);
+  }
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || hh > 23 || mm > 59) return null;
   const p = (n: number) => String(n).padStart(2, "0");
   const dt = toUtc(`${y}-${p(mo)}-${p(d)}T${p(hh)}:${p(mm)}:00`, tz);
   return Number.isNaN(dt.getTime()) ? null : dt;

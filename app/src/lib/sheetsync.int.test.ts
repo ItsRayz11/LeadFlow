@@ -96,6 +96,19 @@ d("sheet ingestion (database)", () => {
     expect(after.ownerId).toBe(memberId);
   });
 
+  it("a CRM edit is never overwritten by a later sheet edit; it becomes a conflict once", async () => {
+    const [ann] = (await leads()).filter((l) => l.externalId === id(1));
+    await db.update(schema.lead).set({ name: "Corrected In CRM" }).where(eq(schema.lead.id, ann.id));
+    body = body.map((r) => (r.includes(id(1)) ? r.replace("Ann Renamed", "Ann Sheet Edit").replace(",camp,", ",camp2,") : r));
+    const r = await sync.syncConnection(connId, "cron");
+    expect(r.conflicts).toBe(1);
+    const [after] = (await leads()).filter((l) => l.externalId === id(1));
+    expect(after.name).toBe("Corrected In CRM");
+    expect(after.campaign).toBe("camp2"); // an untouched field still follows the sheet
+    const again = await sync.syncConnection(connId, "cron");
+    expect(again.conflicts).toBe(0);
+  });
+
   it("a row that disappears from the sheet never deletes the lead", async () => {
     body = body.filter((r) => !r.includes(id(5)));
     await sync.syncConnection(connId, "cron");

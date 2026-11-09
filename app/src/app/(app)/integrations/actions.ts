@@ -1,12 +1,14 @@
 "use server";
 import { revalidatePath } from "next/cache";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/db";
 import { requireCtx } from "@/lib/session";
-import { DEFAULT_COLUMN_MAP, parseSheetUrl } from "@/lib/sheetparse";
+import { fromZonedTime } from "date-fns-tz";
+import { DEFAULT_COLUMN_MAP, parseSheetUrl, parseWorksheet } from "@/lib/sheetparse";
 import { PermanentSyncError, fetchWorksheetCsv, syncConnection } from "@/lib/sheetsync";
 import type { R } from "../actions";
+
 
 async function manager() {
   const c = await requireCtx();
@@ -29,6 +31,8 @@ export async function connectSheetAction(_p: R, fd: FormData): Promise<R> {
     // Prove the sheet is readable before saving anything.
     const table = await fetchWorksheetCsv(parsed.spreadsheetId, parsed.gid);
     if (!table.length) return { error: "That worksheet is empty." };
+    const check = parseWorksheet(table, DEFAULT_COLUMN_MAP, c.tz, fromZonedTime);
+    if (check.missingColumns.length) return { error: `This tab is missing expected columns: ${check.missingColumns.join(", ")}. Nothing was connected.` };
     const [conn] = await db.insert(schema.spreadsheetConnection).values({
       workspaceId: c.workspaceId, spreadsheetId: parsed.spreadsheetId, title: "Google Sheet", mode: "read_only",
     }).onConflictDoUpdate({ target: [schema.spreadsheetConnection.workspaceId, schema.spreadsheetConnection.spreadsheetId], set: { healthy: true, lastError: null } })
@@ -78,10 +82,17 @@ export async function aliasAction(_p: R, fd: FormData): Promise<R> {
     const [m] = await db.select({ id: schema.workspaceMember.id }).from(schema.workspaceMember)
       .where(and(eq(schema.workspaceMember.id, p.data.memberId), eq(schema.workspaceMember.workspaceId, c.workspaceId), eq(schema.workspaceMember.active, true)));
     if (!m) return { error: "That team member is not active." };
-    await db.insert(schema.identityAlias).values({ workspaceId: c.workspaceId, alias: p.data.alias.trim(), memberId: m.id, createdBy: c.userId })
-      .onConflictDoNothing();
+    const alias = p.data.alias.trim();
+    const [exists] = await db.select({ id: schema.identityAlias.id, memberId: schema.identityAlias.memberId }).from(schema.identityAlias)
+      .where(and(eq(schema.identityAlias.workspaceId, c.workspaceId), sql`lower(${schema.identityAlias.alias}) = lower(${alias})`)).limit(1);
+    if (exists) await db.update(schema.identityAlias).set({ memberId: m.id, createdBy: c.userId }).where(eq(schema.identityAlias.id, exists.id));
+    else await db.insert(schema.identityAlias).values({ workspaceId: c.workspaceId, alias, memberId: m.id, createdBy: c.userId });
+    // Resolve only this workspace's conflicts (conflicts belong to a workspace through their connection).
+    const mine = db.select({ id: schema.spreadsheetConnection.id }).from(schema.spreadsheetConnection).where(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId));
     await db.update(schema.syncConflict).set({ resolvedAt: new Date(), resolution: `mapped to member ${m.id}` })
-      .where(and(eq(schema.syncConflict.field, "unmapped_owner"), eq(schema.syncConflict.sheetValue, p.data.alias.trim())));
+      .where(and(inArray(schema.syncConflict.connectionId, mine), eq(schema.syncConflict.field, "unmapped_owner"),
+        sql`lower(${schema.syncConflict.sheetValue}) = lower(${alias})`, isNull(schema.syncConflict.resolvedAt)));
+    await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.alias", entity: "identity_alias", data: { alias, memberId: m.id } });
     return ok("Saved. Future syncs assign this name to that person. Leads already imported can be assigned from the Leads page.");
   } catch (e) { return fail(e); }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fromZonedTime } from "date-fns-tz";
-import { DEFAULT_COLUMN_MAP, cleanAlias, parseCsv, parseSheetUrl, parseWorksheet } from "./sheetparse";
+import { DEFAULT_COLUMN_MAP, cleanAlias, parseCsv, parseSheetDate, parseSheetUrl, parseWorksheet } from "./sheetparse";
 
 const TZ = "Asia/Karachi";
 const csv = [
@@ -27,6 +27,22 @@ describe("sheet url", () => {
     expect(parseSheetUrl("https://evil.example/spreadsheets/d/abc")).toBeNull();
   });
   it("cleans owner names", () => expect(cleanAlias("📄 Fazal")).toBe("Fazal"));
+});
+
+describe("dates with times", () => {
+  const f = (v: string) => parseSheetDate(v, TZ, fromZonedTime)?.toISOString() ?? null;
+  it("honours AM and PM", () => {
+    expect(f("5/3/2026 3:45:00 PM")).toBe("2026-05-03T10:45:00.000Z"); // 15:45 PKT
+    expect(f("5/3/2026 3:45 AM")).toBe("2026-05-02T22:45:00.000Z");
+    expect(f("5/3/2026 12:10 AM")).toBe("2026-05-02T19:10:00.000Z"); // 00:10 PKT
+    expect(f("5/3/2026 12:10 PM")).toBe("2026-05-03T07:10:00.000Z");
+  });
+  it("accepts 24-hour and ISO forms and rejects nonsense", () => {
+    expect(f("2026-05-03 15:45")).toBe("2026-05-03T10:45:00.000Z");
+    expect(f("5/3/2026 13:00 PM")).toBeNull();
+    expect(f("13/40/2026")).toBeNull();
+    expect(f("garbage")).toBeNull();
+  });
 });
 
 describe("worksheet parsing", () => {

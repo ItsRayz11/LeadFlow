@@ -18,7 +18,7 @@ async function handle(req: Request) {
   try {
     const result = await sweep();
     // A failing sheet must never block reminders, so sync errors are reported, not thrown.
-    const sheets = await syncAllConnections().catch(() => ({ connections: 0, created: 0, failed: 1 }));
+    const sheets = await syncAllConnections().catch(() => ({ connections: 0, created: 0, failed: 1, skipped: 0 }));
     return NextResponse.json({ ok: true, at: new Date().toISOString(), ...result, sheets });
   } catch (e) {
     console.error("worker tick failed", e);
