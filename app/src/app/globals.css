@@ -136,7 +136,10 @@ svg.i{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke
   .grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:16px;align-items:start}
   .col{display:grid;gap:16px;min-width:0}
 }
-@media(min-width:700px){.sheet.lead-modal{width:min(760px,94vw);max-height:90vh}}
+/* Lead details open as a right-side drawer on desktop (bottom sheet on phones). */
+@keyframes drawer-in{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
+@media(min-width:700px){.sheet.lead-modal{left:auto;right:0;top:0;bottom:0;transform:none;width:min(600px,94vw);max-height:none;height:100vh;border-radius:20px 0 0 20px;border-right:0;align-content:start;animation:drawer-in .2s ease-out}}
+@media (prefers-reduced-motion:reduce){.sheet.lead-modal{animation:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
 
