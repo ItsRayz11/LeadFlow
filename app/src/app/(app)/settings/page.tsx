@@ -6,6 +6,7 @@ import { readSettings } from "@/lib/schedule";
 import { externalChannels } from "@/lib/notify";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { settingsAction } from "../team/actions";
+import { LeadViewToggle } from "@/components/LeadViewToggle";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,12 @@ export default async function SettingsPage() {
           {admin && <div><Submit>Save settings</Submit></div>}
         </fieldset>
       </ActionForm>
+
+      <section className="panel glass">
+        <h2>How leads open</h2>
+        <p className="sub">Your own choice, remembered in this browser. The pop-up lets you update a lead without leaving the list.</p>
+        <LeadViewToggle />
+      </section>
 
       <section className="panel glass">
         <h2>Reminder delivery</h2>

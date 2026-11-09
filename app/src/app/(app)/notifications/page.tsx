@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { LeadLink } from "@/components/LeadLink";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requireCtx } from "@/lib/session";
@@ -31,7 +31,7 @@ export default async function Alerts() {
           <div className="queue">{rows.map((n) => (
             <article key={n.id} className={`lead ${n.kind === "overdue" || n.kind === "escalation" ? "overdue" : ""}`} style={{ opacity: n.readAt ? 0.7 : 1 }}>
               <div className="lead-top">
-                <div>{n.leadId ? <Link href={`/leads/${n.leadId}`} style={{ color: "inherit", textDecoration: "none" }}><b>{n.title}</b></Link> : <b>{n.title}</b>}
+                <div>{n.leadId ? <LeadLink id={n.leadId} style={{ color: "inherit", textDecoration: "none" }}><b>{n.title}</b></LeadLink> : <b>{n.title}</b>}
                   {n.body && <div className="sub">{n.body}</div>}
                   <div className="sub">{n.createdAt.toLocaleString([], { timeZone: c.tz, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div></div>
                 <span className={`pill ${n.kind === "overdue" || n.kind === "escalation" ? "crit" : "acc"}`}>{kind[n.kind] ?? n.kind}</span>

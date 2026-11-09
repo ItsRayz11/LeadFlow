@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { db, schema } from "@/db";
 import { canManage, requireCtx } from "@/lib/session";
 import { ActionForm, Submit } from "@/components/ActionForm";
-import { aliasAction, conflictAction, confirmAllAction, connectSheetAction, stopTabAction, syncNowAction } from "./actions";
+import { aliasAction, conflictAction, confirmAllAction, connectSheetAction, addTabsAction, stopTabAction, syncNowAction } from "./actions";
 import { MappingPanel } from "./MappingPanel";
 
 export const dynamic = "force-dynamic";
@@ -62,6 +62,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               <ActionForm action={stopTabAction}><input type="hidden" name="mappingId" value={m.id} /><Submit className="btn ghost">Stop tracking this tab</Submit></ActionForm>
             </div>
           ))}
+          <ActionForm action={addTabsAction}><input type="hidden" name="connectionId" value={cn.id} /><Submit className="btn ghost" pendingText="Looking for tabs">Add more tabs</Submit><p className="sub">Finds tabs in this spreadsheet that are not connected yet. Connected tabs are left as they are.</p></ActionForm>
           {maps.some((m) => m.confirmedAt) && (
             <ActionForm action={syncNowAction}><input type="hidden" name="connectionId" value={cn.id} /><Submit pendingText="Syncing">Sync now</Submit></ActionForm>
           )}

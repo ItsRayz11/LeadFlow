@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LeadLink } from "@/components/LeadLink";
 import { notFound } from "next/navigation";
 import { and, desc, eq, isNull, gt, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
@@ -53,10 +54,10 @@ export default async function TeamPage() {
         <div className="panel-head"><h2>Overdue leads</h2><Link className="chip" href="/followups?view=overdue">Open queue</Link></div>
         {overdue.length === 0 ? <div className="empty">No overdue follow-ups.</div> : (
           <div className="queue">{overdue.map((o) => (
-            <Link key={o.id} href={`/leads/${o.id}`} className="lead overdue" style={{ color: "inherit", textDecoration: "none" }}>
+            <LeadLink key={o.id} id={o.id} className="lead overdue" style={{ color: "inherit", textDecoration: "none" }}>
               <div className="lead-top"><div><b>{o.name}</b><div className="sub">Owner: {o.owner ?? "Unassigned"}</div></div>
                 <span><span className="pill crit">{rel(o.due)} overdue</span>{o.esc && <span className="pill crit" style={{ marginLeft: 4 }}>escalated</span>}</span></div>
-            </Link>))}</div>
+            </LeadLink>))}</div>
         )}
       </section>
 

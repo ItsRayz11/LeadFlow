@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { LeadLink } from "@/components/LeadLink";
+import { LeadViewToggle } from "@/components/LeadViewToggle";
 import { requireCtx, canWrite } from "@/lib/session";
 import { SEGS, listLeads, relTime, segCounts, type Seg } from "@/lib/leads";
 
@@ -30,6 +32,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         <div><h1>Leads</h1><p>{rows.length} shown</p></div>
         {canWrite(c) && <Link className="btn" href="/leads/new" style={{ display: "inline-flex", alignItems: "center" }}>Add lead</Link>}
       </header>
+      <LeadViewToggle />
 
       <section className="panel glass">
         <form className="filters" action="/leads">
@@ -50,14 +53,14 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               <thead><tr><th>Name</th><th>Owner</th><th>Status</th><th>Next follow-up</th><th>Source</th><th>Milestones</th></tr></thead>
               <tbody>{rows.map((r) => (
                 <tr key={r.id}>
-                  <td><Link href={`/leads/${r.id}`} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub num">{r.phone}</div></Link></td>
+                  <td><LeadLink id={r.id} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub num">{r.phone}</div></LeadLink></td>
                   <td>{owner(r)}</td><td><span className="pill acc">{STATUS[r.status]}</span></td><td>{due(r)}</td><td>{r.source}</td><td className="num">{r.ms}/4</td>
                 </tr>))}</tbody>
             </table></div></div>
             <div className="cards m">{rows.map((r) => (
-              <Link key={r.id} href={`/leads/${r.id}`} className="lead" style={{ color: "inherit", textDecoration: "none" }}>
+              <LeadLink key={r.id} id={r.id} className="lead" style={{ color: "inherit", textDecoration: "none" }}>
                 <div className="lead-top"><div><b>{r.name}</b><div className="sub">{r.owner ?? "Unassigned"} · {r.source} · {STATUS[r.status]}</div></div>{due(r)}</div>
-              </Link>))}</div>
+              </LeadLink>))}</div>
           </>
         )}
       </section>

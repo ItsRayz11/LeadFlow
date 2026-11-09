@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { LeadLink } from "@/components/LeadLink";
 import { useActionState, useState } from "react";
 import { createLead, type FormState } from "../actions";
 
@@ -29,7 +30,7 @@ export function NewLeadForm({ owners }: { owners: { id: string; name: string }[]
         <p className="err" role="alert">
           {state.error}{" "}
           {state.dupId && (
-            <>Open <Link href={`/leads/${state.dupId}`} style={{ color: "var(--accent)" }}>{state.dupName}</Link>, or{" "}
+            <>Open <LeadLink id={state.dupId} style={{ color: "var(--accent)" }}>{state.dupName}</LeadLink>, or{" "}
               <label style={{ cursor: "pointer" }}><input type="checkbox" name="force" value="1" checked={v.force} onChange={(e) => setV({ ...v, force: e.target.checked })} /> add anyway</label>.</>
           )}
         </p>

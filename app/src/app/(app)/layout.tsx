@@ -8,7 +8,7 @@ import { db, schema } from "@/db";
 import { count } from "drizzle-orm";
 import { scope } from "@/lib/leads";
 
-export default async function AppLayout({ children }: { children: React.ReactNode }) {
+export default async function AppLayout({ children, modal }: { children: React.ReactNode; modal: React.ReactNode }) {
   const ctx = await getCtx();
   if (!ctx) {
     const s = await auth.api.getSession({ headers: await headers() });
@@ -38,6 +38,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <div className="shell">
       <SideNav name={ctx.name} role={ctx.role} isManager={mgr} counts={counts} />
       <main className="main">{children}</main>
+      {modal}
       <TabBar isManager={mgr} counts={counts} />
     </div>
   );

@@ -136,6 +136,7 @@ svg.i{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke
   .grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:16px;align-items:start}
   .col{display:grid;gap:16px;min-width:0}
 }
+@media(min-width:700px){.sheet.lead-modal{width:min(760px,94vw);max-height:90vh}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
 

@@ -25,60 +25,83 @@ const fail = (e: unknown): R => {
 };
 const ok = (message: string): R => { revalidatePath("/integrations"); revalidatePath("/", "layout"); return { ok: true, message }; };
 
-const MAX_TABS = 12;
+/**
+ * Connects one tab (scope "tab") or every tab not yet connected (scope "all"). Tabs without the expected columns are reported, never half-connected.
+ * A spreadsheet with many tabs is connected in batches that fit the time limit; running it again continues with the rest.
+ */
+async function connectTabs(c: Awaited<ReturnType<typeof manager>>, spreadsheetId: string, scope: "tab" | "all", gid: string | null): Promise<R> {
+  const deadline = Date.now() + 50_000;
+  let tabs: { gid: string; title: string }[];
+  const [existing] = await db.select({ id: schema.spreadsheetConnection.id }).from(schema.spreadsheetConnection)
+    .where(and(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId), eq(schema.spreadsheetConnection.spreadsheetId, spreadsheetId)));
+  const have = new Set<string>(existing
+    ? (await db.select({ g: schema.worksheetMapping.sheetGid }).from(schema.worksheetMapping)
+      .where(and(eq(schema.worksheetMapping.connectionId, existing.id), eq(schema.worksheetMapping.enabled, true)))).map((r) => r.g)
+    : []);
+  if (scope === "all") {
+    const all = await fetchTabList(spreadsheetId);
+    tabs = all.filter((t) => !have.has(t.gid));
+    if (!tabs.length) return { error: `All ${all.length} tab${all.length === 1 ? " is" : "s are"} already connected.` };
+  } else {
+    const known = await fetchTabList(spreadsheetId).catch(() => []);
+    tabs = [{ gid: gid!, title: known.find((t) => t.gid === gid)?.title ?? `Worksheet ${gid}` }];
+  }
+  // Prove each tab is readable and has the expected columns before saving anything.
+  const good: typeof tabs = [], problems: string[] = [];
+  let left = 0;
+  for (const [i, t] of tabs.entries()) {
+    try {
+      const table = await fetchWorksheetCsv(spreadsheetId, t.gid, deadline);
+      if (!table.length) { problems.push(`“${t.title}” is empty`); continue; }
+      const check = parseWorksheet(table, DEFAULT_COLUMN_MAP, c.tz, fromZonedTime);
+      if (check.missingColumns.length) problems.push(`“${t.title}” is missing ${check.missingColumns.join(", ")}`);
+      else good.push(t);
+    } catch (e) {
+      if (e instanceof BudgetError) { left = tabs.length - i; break; }
+      if (scope === "tab") throw e;
+      problems.push(`“${t.title}” could not be read`);
+    }
+  }
+  if (!good.length) {
+    if (left) return { error: "Reading the tabs took too long. Nothing was connected; try again." };
+    return { error: `Nothing was connected. ${problems.join("; ") || "No tabs found."}.` };
+  }
+  const [conn] = await db.insert(schema.spreadsheetConnection).values({
+    workspaceId: c.workspaceId, spreadsheetId, title: "Google Sheet", mode: "read_only",
+  }).onConflictDoUpdate({ target: [schema.spreadsheetConnection.workspaceId, schema.spreadsheetConnection.spreadsheetId], set: { healthy: true, lastError: null } })
+    .returning({ id: schema.spreadsheetConnection.id });
+  for (const t of good) {
+    // A tab that was switched off is switched back on and must be confirmed again.
+    await db.insert(schema.worksheetMapping).values({
+      connectionId: conn.id, sheetGid: t.gid, sheetTitle: t.title, enabled: true, headerRow: 1,
+      columnMap: DEFAULT_COLUMN_MAP, identityStrategy: "source_id_column",
+    }).onConflictDoUpdate({ target: [schema.worksheetMapping.connectionId, schema.worksheetMapping.sheetGid], set: { enabled: true, sheetTitle: t.title, confirmedAt: null } });
+  }
+  await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.connect", entity: "spreadsheet_connection", entityId: conn.id, data: { scope, gids: good.map((t) => t.gid) } });
+  const skipped = problems.length ? ` Not connected: ${problems.join("; ")}.` : "";
+  const more = left ? ` ${left} more tab${left === 1 ? "" : "s"} did not fit in the time allowed. Press “Add more tabs” to continue.` : "";
+  return ok(`Connected ${good.length} tab${good.length === 1 ? "" : "s"}. Review the column mapping below, then confirm to import.${skipped}${more}`);
+}
 
-/** Connects either one tab ("tab") or every tab of the spreadsheet ("all"). Tabs without the expected columns are reported, never half-connected. */
 export async function connectSheetAction(_p: R, fd: FormData): Promise<R> {
   const p = z.object({ url: z.string().max(500), scope: z.enum(["tab", "all"]).default("tab") }).safeParse(Object.fromEntries(fd));
   const parsed = p.success ? parseSheetUrl(p.data.url) : null;
   if (!p.success || !parsed) return { error: "Paste a Google Sheets link (https://docs.google.com/spreadsheets/d/…)." };
-  const scope = p.data.scope;
-  if (scope === "tab" && !parsed.gid) return { error: "To track one tab, open that tab and paste the full link; it must contain gid=…" };
-  const deadline = Date.now() + 50_000;
+  if (p.data.scope === "tab" && !parsed.gid) return { error: "To track one tab, open that tab and paste the full link; it must contain gid=…" };
+  try { return await connectTabs(await manager(), parsed.spreadsheetId, p.data.scope, parsed.gid); } catch (e) { return fail(e); }
+}
+
+/** Looks at the spreadsheet again and connects any tabs that are not connected yet (for example tabs added since, or ones that did not fit last time). */
+export async function addTabsAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ connectionId: z.string().uuid() }).safeParse(Object.fromEntries(fd));
+  if (!p.success) return { error: "Invalid request." };
   try {
     const c = await manager();
-    // Which tabs: the one in the link, or everything the spreadsheet lists.
-    let tabs: { gid: string; title: string }[];
-    if (scope === "all") {
-      tabs = await fetchTabList(parsed.spreadsheetId);
-      if (tabs.length > MAX_TABS) return { error: `This spreadsheet has ${tabs.length} tabs; at most ${MAX_TABS} can be connected at once. Connect the ones you need one at a time.` };
-    } else {
-      const known = await fetchTabList(parsed.spreadsheetId).catch(() => []);
-      tabs = [{ gid: parsed.gid!, title: known.find((t) => t.gid === parsed.gid)?.title ?? `Worksheet ${parsed.gid}` }];
-    }
-    // Prove each tab is readable and has the expected columns before saving anything.
-    const good: typeof tabs = [], problems: string[] = [];
-    for (const t of tabs) {
-      try {
-        const table = await fetchWorksheetCsv(parsed.spreadsheetId, t.gid, deadline);
-        if (!table.length) { problems.push(`“${t.title}” is empty`); continue; }
-        const check = parseWorksheet(table, DEFAULT_COLUMN_MAP, c.tz, fromZonedTime);
-        if (check.missingColumns.length) problems.push(`“${t.title}” is missing ${check.missingColumns.join(", ")}`);
-        else good.push(t);
-      } catch (e) {
-        if (scope === "tab" || e instanceof BudgetError) throw e;
-        problems.push(`“${t.title}” could not be read`);
-      }
-    }
-    if (!good.length) return { error: `Nothing was connected. ${problems.join("; ") || "No tabs found."}.` };
-    const [conn] = await db.insert(schema.spreadsheetConnection).values({
-      workspaceId: c.workspaceId, spreadsheetId: parsed.spreadsheetId, title: "Google Sheet", mode: "read_only",
-    }).onConflictDoUpdate({ target: [schema.spreadsheetConnection.workspaceId, schema.spreadsheetConnection.spreadsheetId], set: { healthy: true, lastError: null } })
-      .returning({ id: schema.spreadsheetConnection.id });
-    for (const t of good) {
-      // A tab connected earlier keeps its mapping; one that was switched off is switched back on and must be confirmed again.
-      await db.insert(schema.worksheetMapping).values({
-        connectionId: conn.id, sheetGid: t.gid, sheetTitle: t.title, enabled: true, headerRow: 1,
-        columnMap: DEFAULT_COLUMN_MAP, identityStrategy: "source_id_column",
-      }).onConflictDoUpdate({ target: [schema.worksheetMapping.connectionId, schema.worksheetMapping.sheetGid], set: { enabled: true, sheetTitle: t.title } });
-    }
-    await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.connect", entity: "spreadsheet_connection", entityId: conn.id, data: { scope, gids: good.map((t) => t.gid) } });
-    const skipped = problems.length ? ` Not connected: ${problems.join("; ")}.` : "";
-    return ok(`Connected ${good.length} tab${good.length === 1 ? "" : "s"}. Review the column mapping below, then confirm to import.${skipped}`);
-  } catch (e) {
-    if (e instanceof BudgetError) return { error: "Reading the tabs took too long. Nothing was connected; try again or connect fewer tabs." };
-    return fail(e);
-  }
+    const [conn] = await db.select({ s: schema.spreadsheetConnection.spreadsheetId }).from(schema.spreadsheetConnection)
+      .where(and(eq(schema.spreadsheetConnection.id, p.data.connectionId), eq(schema.spreadsheetConnection.workspaceId, c.workspaceId)));
+    if (!conn) return { error: "Connection not found." };
+    return await connectTabs(c, conn.s, "all", null);
+  } catch (e) { return fail(e); }
 }
 
 /** Stops tracking one tab. Leads already imported stay in the CRM; other tabs are untouched. */

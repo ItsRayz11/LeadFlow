@@ -1,5 +1,5 @@
 "use client";
-import Link from "next/link";
+import { LeadLink } from "@/components/LeadLink";
 import { useMemo, useState } from "react";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { AssignControl, QuickActions, RescheduleButton } from "@/components/FollowUpActions";
@@ -54,7 +54,7 @@ export function TaskList({ rows, owners, canManage, canWrite, selfId }: {
         <tbody>{rows.map((r) => (
           <tr key={r.leadId} style={{ cursor: "default" }}>
             {canManage && <td><input className="chk" type="checkbox" aria-label={`Select ${r.name}`} checked={sel.includes(r.leadId)} onChange={() => toggle(r.leadId)} /></td>}
-            <td><Link href={`/leads/${r.leadId}`} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub num">{r.phone}</div></Link></td>
+            <td><LeadLink id={r.leadId} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub num">{r.phone}</div></LeadLink></td>
             <td>{canManage ? <AssignControl leadId={r.leadId} ownerId={r.ownerId} owners={owners} /> : r.owner ?? <span className="pill crit">Unassigned</span>}</td>
             <td>{STEP[r.step ?? r.leadStep]}</td>
             <td><Due r={r} now={now} /></td>
@@ -66,7 +66,7 @@ export function TaskList({ rows, owners, canManage, canWrite, selfId }: {
       <div className="cards m">{rows.map((r) => (
         <article key={r.leadId} className={`lead ${r.dueAt && new Date(r.dueAt).getTime() < now ? "overdue" : ""}`}>
           <div className="lead-top">
-            <Link href={`/leads/${r.leadId}`} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub">{STEP[r.step ?? r.leadStep]} · {r.owner ?? "Unassigned"}</div></Link>
+            <LeadLink id={r.leadId} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub">{STEP[r.step ?? r.leadStep]} · {r.owner ?? "Unassigned"}</div></LeadLink>
             <Due r={r} now={now} />
           </div>
           {canAct(r) && <div className="acts"><QuickActions leadId={r.leadId} name={r.name} phone={r.phone} /><RescheduleButton leadId={r.leadId} name={r.name} /></div>}
@@ -100,7 +100,7 @@ export function DoneList({ rows }: { rows: DoneRowDTO[] }) {
     <div className="queue">{rows.map((r, i) => (
       <article key={i} className="lead">
         <div className="lead-top">
-          <Link href={`/leads/${r.leadId}`} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub">{STEP[r.step]} · {r.owner ?? "Unassigned"} · {r.channel ?? "n/a"}</div></Link>
+          <LeadLink id={r.leadId} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub">{STEP[r.step]} · {r.owner ?? "Unassigned"} · {r.channel ?? "n/a"}</div></LeadLink>
           <span className="pill ok">{OUT[r.outcome ?? ""] ?? "Done"}</span>
         </div>
         {r.notes && <p className="sub" style={{ margin: 0 }}>{r.notes}</p>}
