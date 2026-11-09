@@ -58,6 +58,15 @@ d("insights (database)", () => {
     expect((await ins.summary(ctx, F("30d"))).newLeads).toBe(5);
   });
 
+  it("leads without an arrival date are not counted as arrivals", async () => {
+    const [l] = await db.insert(schema.lead).values({
+      workspaceId: ctx.workspaceId, name: `INS nodate ${tag}`, source: tag, acquiredAt: new Date(), custom: { acquiredDateMissing: true },
+    }).returning();
+    created.push(l.id);
+    expect((await ins.summary(ctx, F("today"))).newLeads).toBe(3);
+    expect((await ins.snapshot(ctx, F("today"))).active).toBeGreaterThanOrEqual(4); // still an active lead
+  });
+
   it("compares with the equally long period right before", async () => {
     expect((await ins.summary(ctx, F("today"), 1)).newLeads).toBe(1); // yesterday
     expect((await ins.summary(ctx, F("7d"), 1)).newLeads).toBe(1); // days 7-13 contain the 10-day-old lead

@@ -17,6 +17,8 @@ async function manager() {
   return c;
 }
 const fail = (e: unknown): R => {
+  // An expired session redirects to /login; do not swallow that into a generic error.
+  if ((e as { digest?: string } | null)?.digest?.startsWith("NEXT_REDIRECT")) throw e;
   if (e instanceof PermanentSyncError) return { error: e.message };
   console.error(e);
   return { error: "Something went wrong. Nothing was changed. Try again." };
@@ -57,7 +59,9 @@ export async function confirmMappingAction(_p: R, fd: FormData): Promise<R> {
       .where(and(eq(schema.worksheetMapping.id, p.data.mappingId), eq(schema.spreadsheetConnection.workspaceId, c.workspaceId)));
     if (!row) return { error: "Worksheet not found." };
     await db.update(schema.worksheetMapping).set({ confirmedAt: new Date(), enabled: true }).where(eq(schema.worksheetMapping.id, row.m.id));
-    const s = await syncConnection(row.m.connectionId, "initial", c.userId);
+    const s = await syncConnection(row.m.connectionId, "initial", c.userId, Date.now() + 50_000);
+    if (!s.ran) return { error: "A sync is already running for this sheet. Wait a minute and check the history below." };
+    if (s.partial) return ok(`Imported ${s.created} leads so far. It did not finish in the time allowed and will continue automatically on the next run.`);
     return ok(`Imported ${s.created} new leads (${s.assigned} assigned from the owner column, ${s.skipped} rows skipped).`);
   } catch (e) { return fail(e); }
 }
@@ -70,7 +74,9 @@ export async function syncNowAction(_p: R, fd: FormData): Promise<R> {
     const [conn] = await db.select({ id: schema.spreadsheetConnection.id }).from(schema.spreadsheetConnection)
       .where(and(eq(schema.spreadsheetConnection.id, p.data.connectionId), eq(schema.spreadsheetConnection.workspaceId, c.workspaceId)));
     if (!conn) return { error: "Connection not found." };
-    const s = await syncConnection(conn.id, "manual", c.userId);
+    const s = await syncConnection(conn.id, "manual", c.userId, Date.now() + 50_000);
+    if (!s.ran) return { error: "A sync is already running for this sheet, or no worksheet is confirmed yet." };
+    if (s.partial) return ok(`Synced ${s.created} new so far. It did not finish in the time allowed and will continue on the next run.`);
     return ok(`Sync finished: ${s.created} new, ${s.updated} updated, ${s.skipped} skipped.`);
   } catch (e) { return fail(e); }
 }

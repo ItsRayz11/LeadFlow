@@ -27,7 +27,7 @@ const inRange = (col: unknown, tz: string, fromBack: number, toBack: number) =>
 export function parseFilters(c: Ctx, sp: Record<string, string | undefined>): Filters {
   const period = (PERIODS.find((p) => p.key === sp.period)?.key ?? "7d") as PeriodKey;
   const mgr = c.role === "admin" || c.role === "manager";
-  const uuid = /^[0-9a-f-]{36}$/i;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   return {
     period,
     ownerId: mgr && sp.owner && uuid.test(sp.owner) ? sp.owner : undefined,
@@ -44,6 +44,9 @@ function leadWhere(c: Ctx, f: Filters, extra?: SQL): SQL {
   return and(...parts)!;
 }
 
+/** Leads with no arrival date in the sheet carry the import time instead; counting them as "arrived" would fake a spike. */
+const dated = sql`coalesce(${L.custom}->>'acquiredDateMissing', '') <> 'true'`;
+
 const range = (f: Filters, back = 0) => {
   const p = PERIODS.find((x) => x.key === f.period)!;
   const len = p.from - p.to + 1;
@@ -59,7 +62,7 @@ export type Summary = {
 export async function summary(c: Ctx, f: Filters, back = 0): Promise<Summary> {
   const r = range(f, back);
   const [a] = await db.select({
-    newLeads: sql<number>`count(*) filter (where ${inRange(L.acquiredAt, c.tz, r.from, r.to)})::int`,
+    newLeads: sql<number>`count(*) filter (where ${inRange(L.acquiredAt, c.tz, r.from, r.to)} and ${dated})::int`,
     firstContacted: sql<number>`count(*) filter (where ${inRange(L.firstContactedAt, c.tz, r.from, r.to)})::int`,
     converted: sql<number>`count(*) filter (where ${inRange(L.convertedAt, c.tz, r.from, r.to)})::int`,
     closed: sql<number>`count(*) filter (where ${inRange(L.closedAt, c.tz, r.from, r.to)})::int`,
@@ -91,7 +94,7 @@ export async function daily(c: Ctx, f: Filters): Promise<DayRow[]> {
   const span = Math.max(r.from, 6);
   const byDay = async (col: unknown) => {
     const rows = await db.select({ day: sql<string>`to_char(${localDay(col, c.tz)}, 'YYYY-MM-DD')`, n: sql<number>`count(*)::int` })
-      .from(L).where(leadWhere(c, f, inRange(col, c.tz, span, r.to))).groupBy(sql`1`);
+      .from(L).where(leadWhere(c, f, col === L.acquiredAt ? and(inRange(col, c.tz, span, r.to), dated) : inRange(col, c.tz, span, r.to))).groupBy(sql`1`);
     return new Map(rows.map((x) => [x.day, x.n]));
   };
   const [a, k, v] = await Promise.all([byDay(L.acquiredAt), byDay(L.firstContactedAt), byDay(L.convertedAt)]);
@@ -156,7 +159,7 @@ export async function bySource(c: Ctx, f: Filters): Promise<SourceRow[]> {
     leads: sql<number>`count(*)::int`,
     contacted: sql<number>`count(${L.firstContactedAt})::int`,
     converted: sql<number>`count(${L.convertedAt})::int`,
-  }).from(L).where(leadWhere(c, { ...f, source: undefined }, inRange(L.acquiredAt, c.tz, r.from, r.to)))
+  }).from(L).where(leadWhere(c, { ...f, source: undefined }, and(inRange(L.acquiredAt, c.tz, r.from, r.to), dated)))
     .groupBy(sql`1`).orderBy(sql`2 desc`).limit(25);
 }
 
@@ -170,13 +173,13 @@ export async function milestones(c: Ctx, f: Filters) {
     cardPurchased: sql<number>`count(${L.cardPurchasedAt})::int`,
     spendingStarted: sql<number>`count(${L.spendingStartedAt})::int`,
     converted: sql<number>`count(${L.convertedAt})::int`,
-  }).from(L).where(leadWhere(c, f, inRange(L.acquiredAt, c.tz, r.from, r.to)));
+  }).from(L).where(leadWhere(c, f, and(inRange(L.acquiredAt, c.tz, r.from, r.to), dated)));
   return x;
 }
 
 export async function sourceOptions(c: Ctx): Promise<string[]> {
-  const rows = await db.selectDistinct({ s: sql<string>`coalesce(${L.source}, '(none)')` }).from(L).where(scope(c)).limit(50);
-  return rows.map((x) => x.s).sort();
+  const rows = await db.selectDistinct({ s: sql<string>`coalesce(${L.source}, '(none)')` }).from(L).where(scope(c)).orderBy(sql`1`).limit(100);
+  return rows.map((x) => x.s);
 }
 
 /** Spreadsheet formulas in exported cells would run when opened in Excel; neutralise them. */
@@ -185,4 +188,5 @@ export const csvCell = (v: unknown) => {
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
-export const toCsv = (rows: unknown[][]) => rows.map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n";
+// The byte-order mark makes Excel read names with accents or Urdu text correctly.
+export const toCsv = (rows: unknown[][]) => "\uFEFF" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n";

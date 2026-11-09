@@ -89,7 +89,7 @@ export default async function Insights({ searchParams }: { searchParams: Promise
           <Stat k="Average time to first contact" v={hrs(cur.avgFirstContactHrs)} />
           <Stat k="Follow-up deadlines missed" v={cur.missed} now={cur.missed} before={prev.missed} />
         </div>
-        <p className="sub">Conversion of new leads in this period: {pct(ms.converted, ms.leads)}. Leads can convert after the period they arrived in, so small periods understate it.</p>
+        <p className="sub">{f.period === "today" || f.period === "7d" ? "The current day is still in progress, so comparisons with the previous period look lower until it ends. " : ""}Leads whose arrival date is missing in the sheet are left out of arrival-based counts. Conversion of new leads in this period: {pct(ms.converted, ms.leads)}. Leads can convert after the period they arrived in, so small periods understate it.</p>
       </section>
 
       <section className="panel glass">
@@ -121,7 +121,7 @@ export default async function Insights({ searchParams }: { searchParams: Promise
       {mgr && (
         <section className="panel glass">
           <h2>By team member</h2>
-          <p className="sub">Shown side by side on purpose. Leads handed over is not a measure of performance, so there is no ranking.</p>
+          <p className="sub">Shown side by side on purpose. Leads handed over is not a measure of performance, so there is no ranking. Open, overdue, first contacts and conversions are credited to the lead&apos;s current owner; attempts to whoever logged them; missed deadlines to the task owner. Unassigned leads and former members are not listed, so these rows will not add up to the cards above.</p>
           <div style={{ overflowX: "auto" }}>
             <table>
               <thead><tr><th>Name</th><th>Open leads</th><th>Overdue now</th><th>First contacts</th><th>Attempts logged</th><th>Converted</th><th>Deadlines missed</th><th>Avg to first contact</th></tr></thead>

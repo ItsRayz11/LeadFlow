@@ -64,13 +64,13 @@ Notes
 ## Phase 4 — Google Sheets Integration
 - [ ] OAuth (minimum scopes) + encrypted token storage
 - [x] Connect by URL (single tab via gid). Worksheet picker needs OAuth
-- [~] Fixed default column mapping per tab with a confirm step. No preview or mapping editor yet (the page text said otherwise)
+- [x] Per-tab column mapping editor, preview of headers and sample rows, confirm step
 - [x] Initial full import (staging-tested with synthetic data; real sheet not yet imported). Old or already-worked leads are imported without contact tasks
 - [x] Incremental reconciliation runs inside the worker tick (daily on Vercel Cron, 5-minute best effort via GitHub Actions)
 - [ ] Drive change notifications + channel renewal
 - [x] Sync Now, retries with exponential backoff on 429/5xx
 - [~] Sync history + visible errors done. Reconnect flow needs OAuth
-- [~] Unmapped owner names, possible duplicates and CRM-vs-sheet field conflicts are recorded. No conflict resolution screen yet
+- [x] Unmapped owner names, possible duplicates and CRM-vs-sheet field conflicts are recorded, with a screen to settle each conflict
 - [ ] Optional two-way mode (with preview, loop prevention)
 
 ## Phase 5 — Premium Interfaces
@@ -85,7 +85,7 @@ Notes
 ## Phase 6 — AI & Analytics
 - [ ] Metric definitions + deterministic queries
 - [ ] Today vs Yesterday, 7/14 day views
-- [ ] Insights page + filters + export
+- [x] Insights page + filters + CSV export (staging-tested; no real data yet)
 - [ ] Daily summary (grounded)
 - [ ] NL questions via role-scoped queries
 - [ ] AI safeguards + on/off setting
@@ -127,3 +127,4 @@ Notes
 | 2026-11-04 | Production rollout: backup branch pre-rollout-20261104, migrations 0002 and 0003 applied and schema matched to staging, OWNER_EMAIL and SETUP_TOKEN set, deployed, unauthenticated checks passed, GitHub scheduler verified by manual run. Owner account not yet created. Next: owner registers at /setup, then Google Sheets integration. |
 | 2026-11-09 | Phase 4 slice: read-only sheet import via link-sharing CSV export (no OAuth yet), identity by the sheet's `id` column, owner-name aliases, possible-duplicate flagging, Integrations page, sync in worker tick. 9 unit + 8 staging DB tests pass. Owner account still not registered; Google OAuth credentials still needed for private sheets, picker, Drive push and two-way. |
 | 2026-11-09 | Fixed independent-review findings: workspace-scoped alias linking, no due-task flood for old or worked leads, CRM edits are never overwritten by the sheet (recorded as conflicts), AM/PM dates, pending mappings no longer reported as failures, stale-job reaper and overlap guard, time budget, true counts, in-batch duplicates, sheet status refresh. DB tests (14) run only with INTEGRATION=1 against staging. |
+| 2026-11-09 | Insights page (periods, comparison, filters, per-person, by source, milestones, CSV), conflict screen, mapping editor and preview, scientific-notation id guard. Second independent review fixed: false and stale conflicts, locked row updates, atomic overlap guard (advisory lock), time budgets that do not mark a sheet unhealthy, honest manual-sync messages, dateless leads excluded from arrival counts, preview only on request, redirect on expired session. Known gaps: no cap on tasks for a big batch of fresh leads, Google sign-in and AI features not built, DB tests run only with INTEGRATION=1 on staging. |

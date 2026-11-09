@@ -86,6 +86,29 @@ d("sheet operator actions (database)", () => {
     expect(acts.some((a) => a.type === "edited")).toBe(true);
   });
 
+  it("a sheet change in another column does not re-raise a settled difference, and only the newest difference stays open", async () => {
+    // CRM holds "Typed Again"; the sheet's name has not changed. Only the Status column changes.
+    body = [body[0].replace(`,,${leadId}`, `,Working,${leadId}`)];
+    const quiet = await sync.syncConnection(connId, "cron");
+    expect(quiet.conflicts).toBe(0);
+    expect((await theLead()).name).toBe("Typed Again");
+
+    body = [body[0].replace("Ann Third", "Ann Four")];
+    expect((await sync.syncConnection(connId, "cron")).conflicts).toBe(1);
+    body = [body[0].replace("Ann Four", "Ann Five")];
+    expect((await sync.syncConnection(connId, "cron")).conflicts).toBe(1);
+    const open = await openConflicts("name");
+    expect(open).toHaveLength(1);
+    expect(open[0].sheetValue).toBe("Ann Five");
+  });
+
+  it("two syncs started at once run one at a time", async () => {
+    const r = await Promise.all([sync.syncConnection(connId, "cron"), sync.syncConnection(connId, "cron")]);
+    expect(r.filter((x) => x.ran).length).toBeGreaterThanOrEqual(1);
+    const jobs = await db.select().from(schema.syncJob).where(eq(schema.syncJob.connectionId, connId));
+    expect(jobs.filter((j) => j.status === "running")).toHaveLength(0);
+  });
+
   it("a mapping edit is validated, resets confirmation, and cannot change the id column after import", async () => {
     const base = (await import("@/lib/sheetparse")).DEFAULT_COLUMN_MAP;
     await expect(ops.saveMapping(workspaceId, userId, mapId, { ...base, campaign: "no_such_column" })).rejects.toThrow(/not in row/);

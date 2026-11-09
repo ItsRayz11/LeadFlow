@@ -1,6 +1,6 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { fromZonedTime } from "date-fns-tz";
 import { db, schema } from "@/db";
 import { dbTx } from "@/db/tx";
@@ -11,7 +11,6 @@ import { DEFAULT_COLUMN_MAP, parseCsv, parseWorksheet, type ColumnMap, type Pars
 const L = schema.lead;
 const CHUNK = 200;
 const MAX_BYTES = 15 * 1024 * 1024;
-const STALE_JOB_MS = 10 * 60_000; // a "running" job older than this was killed (e.g. function timeout)
 const RECENT_LEAD_MS = 7 * 86_400_000; // only fresh leads get an immediate contact task on import
 /** Fields the sheet may update, and only while the CRM value is still the one the sheet last wrote. */
 export const SOURCE_FIELDS = ["name", "phoneRaw", "email", "campaign", "source"] as const;
@@ -23,6 +22,8 @@ const hashRow = (r: ParsedRow) =>
 const baseOf = (r: ParsedRow): Base => ({ name: r.name, phoneRaw: r.phoneRaw, email: r.email, campaign: r.campaign, source: r.source });
 
 export class PermanentSyncError extends Error {}
+/** Ran out of the time budget. Not a sheet fault: the job is marked partial and the next run carries on. */
+export class BudgetError extends Error {}
 
 /**
  * Reads one worksheet as CSV through Google's export endpoint. This works for sheets shared by link and needs no credentials.
@@ -33,9 +34,10 @@ export async function fetchWorksheetCsv(spreadsheetId: string, gid: string, dead
   const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/export?format=csv&gid=${encodeURIComponent(gid)}`;
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (deadline && Date.now() > deadline) throw new Error("Out of time budget; will retry on the next run.");
+    const left = deadline ? deadline - Date.now() : 15_000;
+    if (left < 2_000) throw new BudgetError("Out of time for this run; the next run continues.");
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(15_000), redirect: "follow", cache: "no-store" });
+      const res = await fetch(url, { signal: AbortSignal.timeout(Math.min(15_000, left)), redirect: "follow", cache: "no-store" });
       if (res.status === 429 || res.status >= 500) throw new Error(`Google returned ${res.status}`);
       const type = res.headers.get("content-type") ?? "";
       if (!res.ok || !type.includes("csv")) throw new PermanentSyncError("The sheet is not readable. Share it as “anyone with the link can view” or connect with Google.");
@@ -44,7 +46,7 @@ export async function fetchWorksheetCsv(spreadsheetId: string, gid: string, dead
       if (buf.byteLength > MAX_BYTES) throw new PermanentSyncError("The worksheet is larger than 15 MB.");
       return parseCsv(buf.toString("utf8"));
     } catch (e) {
-      if (e instanceof PermanentSyncError) throw e;
+      if (e instanceof PermanentSyncError || e instanceof BudgetError) throw e;
       lastErr = e;
       await new Promise((r) => setTimeout(r, 500 * 2 ** attempt)); // exponential backoff
     }
@@ -54,7 +56,7 @@ export async function fetchWorksheetCsv(spreadsheetId: string, gid: string, dead
 
 export type SyncSummary = {
   seen: number; created: number; updated: number; skipped: number; assigned: number; possibleDuplicates: number; conflicts: number;
-  skippedReasons: string[]; ran: boolean;
+  skippedReasons: string[]; ran: boolean; partial?: boolean;
 };
 const emptySummary = (): SyncSummary => ({ seen: 0, created: 0, updated: 0, skipped: 0, assigned: 0, possibleDuplicates: 0, conflicts: 0, skippedReasons: [], ran: true });
 
@@ -90,16 +92,23 @@ export async function syncConnection(
   // Waiting for confirmation is a normal state, not a failure: do nothing and leave health untouched.
   if (!confirmed.length) return { ...emptySummary(), ran: false };
 
-  // Reap jobs killed mid-run, then refuse to overlap with a live one.
-  await db.update(schema.syncJob).set({ status: "failed", finishedAt: new Date(), error: "Interrupted (timed out). Retried automatically." })
-    .where(and(eq(schema.syncJob.connectionId, conn.id), eq(schema.syncJob.status, "running"), lt(schema.syncJob.startedAt, new Date(Date.now() - STALE_JOB_MS))));
-  const [live] = await db.select({ id: schema.syncJob.id }).from(schema.syncJob)
-    .where(and(eq(schema.syncJob.connectionId, conn.id), eq(schema.syncJob.status, "running"))).limit(1);
-  if (live) return { ...emptySummary(), ran: false };
-
-  const [job] = await db.insert(schema.syncJob).values({ connectionId: conn.id, trigger, status: "running" }).returning();
+  // Reap jobs killed mid-run, then claim the connection atomically. The advisory lock makes "check, then insert" safe against a
+  // second sync (cron, GitHub schedule, manual button) starting at the same instant.
+  const job = await dbTx.transaction(async (tx) => {
+    const [{ ok }] = (await tx.execute(sql`select pg_try_advisory_xact_lock(hashtext(${"sheetsync:" + conn.id})) as ok`)).rows as { ok: boolean }[];
+    if (!ok) return null;
+    await tx.update(schema.syncJob).set({ status: "failed", finishedAt: new Date(), error: "Interrupted (timed out). Retried automatically." })
+      .where(and(eq(schema.syncJob.connectionId, conn.id), eq(schema.syncJob.status, "running"), sql`${schema.syncJob.startedAt} < now() - interval '10 minutes'`));
+    const [live] = await tx.select({ id: schema.syncJob.id }).from(schema.syncJob)
+      .where(and(eq(schema.syncJob.connectionId, conn.id), eq(schema.syncJob.status, "running"))).limit(1);
+    if (live) return null;
+    const [j] = await tx.insert(schema.syncJob).values({ connectionId: conn.id, trigger, status: "running" }).returning();
+    return j;
+  });
+  if (!job) return { ...emptySummary(), ran: false };
   const total = emptySummary();
   const errors: string[] = [];
+  let budgetHit = false;
 
   try {
     const resolve = await ownerResolver(conn.workspaceId);
@@ -116,19 +125,22 @@ export async function syncConnection(
         // ingest adds to `total` as each chunk commits, so counts stay true even if a later chunk fails.
         await ingest(conn, ws, settings, m.sheetGid, parsed.rows, resolve, total, deadline);
       } catch (e) {
+        if (e instanceof BudgetError) { budgetHit = true; break; }
         errors.push(`“${m.sheetTitle}”: ${e instanceof Error ? e.message : "failed"}`);
         if (!(e instanceof PermanentSyncError)) console.error("sheet sync", e);
       }
     }
     const failed = errors.length > 0;
-    const status = !failed ? "success" : confirmed.length > errors.length ? "partial" : "failed";
+    total.partial = budgetHit;
+    const status = !failed ? (budgetHit ? "partial" : "success") : confirmed.length > errors.length ? "partial" : "failed";
+    if (budgetHit) errors.push("Not finished in the time allowed; the next run continues from where it stopped.");
     await db.update(schema.syncJob).set({
       status, finishedAt: new Date(), rowsSeen: total.seen, rowsCreated: total.created, rowsUpdated: total.updated, rowsSkipped: total.skipped,
-      error: failed ? errors.join("\n").slice(0, 1500) : null,
+      error: failed || budgetHit ? errors.join("\n").slice(0, 1500) : null,
     }).where(eq(schema.syncJob.id, job.id));
     await db.update(schema.spreadsheetConnection).set(
       failed ? { healthy: false, lastError: errors.join("\n").slice(0, 1500) }
-        : { healthy: true, lastError: null, lastSuccessfulSyncAt: new Date() },
+        : budgetHit ? {} : { healthy: true, lastError: null, lastSuccessfulSyncAt: new Date() },
     ).where(eq(schema.spreadsheetConnection.id, conn.id));
     if (trigger !== "cron" && actorUserId) {
       await db.insert(schema.auditLog).values({ workspaceId: conn.workspaceId, actorId: actorUserId, action: "sheet.sync", entity: "spreadsheet_connection", entityId: conn.id, data: { ...total } });
@@ -149,7 +161,7 @@ async function ingest(
   const now = new Date();
 
   for (let i = 0; i < rows.length; i += CHUNK) {
-    if (deadline && Date.now() > deadline) throw new Error("Out of time budget; the rest will be imported on the next run.");
+    if (deadline && Date.now() > deadline) throw new BudgetError("Out of time for this run; the rest is imported on the next run.");
     const chunk = rows.slice(i, i + CHUNK);
     const ids = chunk.map((r) => r.externalId);
     const existing = await db.select({ id: L.id, externalId: L.externalId, hash: L.sourceRowHash, name: L.name, phoneRaw: L.phoneRaw, email: L.email, campaign: L.campaign, source: L.source, custom: L.custom })
@@ -176,7 +188,8 @@ async function ingest(
       seenInBatch.push({ id, phone: r.phoneNorm, email: r.emailNorm });
       const { memberId } = resolve(r.ownerAlias);
       // History must not flood people: only recent, untouched leads get an immediate contact task.
-      const recent = !!r.acquiredAt && now.getTime() - r.acquiredAt.getTime() <= RECENT_LEAD_MS;
+      const age = r.acquiredAt ? now.getTime() - r.acquiredAt.getTime() : null;
+      const recent = age !== null && age <= RECENT_LEAD_MS && age >= -86_400_000;
       const untouched = !r.sheetStatus;
       const due = memberId && recent && untouched ? dueFor("contact_started", now, now, settings) : null;
       return { r, id, memberId, due, dup };
@@ -238,7 +251,8 @@ async function ingest(
       // The sheet may change a field only while the CRM still holds the value the sheet last wrote.
       // If someone edited it in the CRM, the CRM value wins and the difference is recorded as a conflict.
       for (const r of changed) {
-        const e = have.get(r.externalId)!;
+        const [e] = await tx.select().from(L).where(eq(L.id, have.get(r.externalId)!.id)).for("update"); // fresh and locked: a CRM edit cannot slip in between
+        if (!e) continue;
         const cust = (e.custom ?? {}) as Record<string, unknown> & { sheetBase?: Base };
         const oldBase = cust.sheetBase;
         const next = baseOf(r);
@@ -246,24 +260,30 @@ async function ingest(
         const newBase: Base = { ...(oldBase ?? next) };
         const applied: string[] = [];
         for (const k of SOURCE_FIELDS) {
-          const crm = e[k] ?? null;
+          const crm = (e[k] as string | null) ?? null;
           if (crm === next[k]) { newBase[k] = next[k]; continue; }
-          if (oldBase && crm === (oldBase[k] ?? null)) {
+          const was = oldBase ? (oldBase[k] ?? null) : undefined;
+          if (oldBase && was === next[k]) continue; // the sheet did not change this field; the CRM value is the team's, leave it alone
+          if (oldBase && crm === was) {
             (set as Record<string, unknown>)[k] = next[k];
             if (k === "phoneRaw") set.phoneNorm = r.phoneNorm;
             if (k === "email") set.emailNorm = r.emailNorm;
             newBase[k] = next[k]; applied.push(k);
           } else {
-            const [open] = await tx.select({ id: schema.syncConflict.id }).from(schema.syncConflict).where(and(
-              eq(schema.syncConflict.leadId, e.id), eq(schema.syncConflict.field, k), eq(schema.syncConflict.sheetValue, next[k] ?? ""), isNull(schema.syncConflict.resolvedAt))).limit(1);
-            if (!open) {
-              await tx.insert(schema.syncConflict).values({ connectionId: conn.id, leadId: e.id, field: k, sheetValue: next[k] ?? "", crmValue: crm });
-              chunkOut.conflicts++;
+            // Only the newest difference per lead and field stays open; older ones are superseded.
+            const open = await tx.select().from(schema.syncConflict).where(and(
+              eq(schema.syncConflict.leadId, e.id), eq(schema.syncConflict.field, k), isNull(schema.syncConflict.resolvedAt)));
+            if (open.some((o) => o.sheetValue === (next[k] ?? "") && o.crmValue === crm)) continue;
+            if (open.length) {
+              await tx.update(schema.syncConflict).set({ resolvedAt: now, resolution: "superseded by a newer difference" })
+                .where(inArray(schema.syncConflict.id, open.map((o) => o.id)));
             }
+            await tx.insert(schema.syncConflict).values({ connectionId: conn.id, leadId: e.id, field: k, sheetValue: next[k] ?? "", crmValue: crm });
+            chunkOut.conflicts++;
           }
         }
         await tx.update(L).set({
-          ...set, sourceRowHash: hashRow(r), sourceRaw: r.raw, lastSyncedAt: now, updatedAt: now, updatedBy: "sheet-sync",
+          ...set, sourceRowHash: hashRow(r), sourceRaw: r.raw, lastSyncedAt: now, updatedAt: now, updatedBy: "sheet-sync", version: e.version + (applied.length ? 1 : 0),
           custom: { ...cust, sheetStatus: r.sheetStatus, ownerNameInSheet: r.ownerAlias, sheetBase: newBase },
         }).where(eq(L.id, e.id));
         if (applied.length) {
@@ -284,7 +304,8 @@ async function ingest(
 /** Runs every connection with a confirmed mapping inside a time budget. One failing sheet never blocks the others. */
 export async function syncAllConnections(budgetMs = 35_000): Promise<{ connections: number; created: number; failed: number; skipped: number }> {
   const deadline = Date.now() + budgetMs;
-  const conns = await db.select({ id: schema.spreadsheetConnection.id }).from(schema.spreadsheetConnection);
+  const conns = await db.select({ id: schema.spreadsheetConnection.id }).from(schema.spreadsheetConnection)
+    .orderBy(sql`${schema.spreadsheetConnection.lastSuccessfulSyncAt} asc nulls first`); // least recently synced first, so none starves
   const r = { connections: conns.length, created: 0, failed: 0, skipped: 0 };
   for (const c of conns) {
     if (Date.now() > deadline) { r.skipped++; continue; }

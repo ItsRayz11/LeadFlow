@@ -12,8 +12,9 @@ export const maxDuration = 60;
 
 const fmt = (d: Date | null, tz: string) => (d ? d.toLocaleString([], { timeZone: tz }) : "Never");
 
-export default async function IntegrationsPage() {
+export default async function IntegrationsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const c = await requireCtx();
+  const previewId = (await searchParams).preview;
   if (!canManage(c)) notFound();
   const conns = await db.select().from(schema.spreadsheetConnection).where(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId));
   const members = await db.select({ id: schema.workspaceMember.id, name: schema.workspaceMember.displayName, role: schema.workspaceMember.role })
@@ -48,7 +49,7 @@ export default async function IntegrationsPage() {
             <dt>Access</dt><dd>Link sharing, view only. Google sign-in replaces this once credentials are added.</dd>
             {cn.lastError && <><dt>Last error</dt><dd className="err">{cn.lastError}</dd></>}
           </dl>
-          {maps.map((m) => <MappingPanel key={m.id} spreadsheetId={cn.spreadsheetId} m={m} tz={c.tz} />)}
+          {maps.map((m) => <MappingPanel key={m.id} spreadsheetId={cn.spreadsheetId} m={m} tz={c.tz} show={!m.confirmedAt || previewId === m.id} />)}
           {maps.some((m) => m.confirmedAt) && (
             <ActionForm action={syncNowAction}><input type="hidden" name="connectionId" value={cn.id} /><Submit pendingText="Syncing">Sync now</Submit></ActionForm>
           )}

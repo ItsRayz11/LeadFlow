@@ -40,23 +40,29 @@ export async function resolveFieldConflict(workspaceId: string, userId: string, 
     const c = row.c;
     const field = c.field as SourceField;
     if (!SOURCE_FIELDS.includes(field) || !c.leadId) throw new PermanentSyncError("This kind of notice cannot be settled here.");
-    if (choice === "sheet") {
+    const latest = await tx.select({ id: schema.syncConflict.id }).from(schema.syncConflict).where(and(
+      eq(schema.syncConflict.leadId, c.leadId), eq(schema.syncConflict.field, c.field), isNull(schema.syncConflict.resolvedAt), sql`${schema.syncConflict.createdAt} > (select s2.created_at from sync_conflict s2 where s2.id = ${c.id})`)).limit(1);
+    if (latest.length) throw new PermanentSyncError("The sheet changed again since this difference was recorded. Reload to see the newest one.");
+    {
       const [lead] = await tx.select().from(L).where(and(eq(L.id, c.leadId), eq(L.workspaceId, workspaceId))).for("update");
       if (!lead) throw new PermanentSyncError("The lead no longer exists.");
       const v = c.sheetValue || null;
-      if (field === "name" && !v) throw new PermanentSyncError("A lead needs a name.");
-      const set: Partial<typeof L.$inferInsert> = { [field]: v } as Partial<typeof L.$inferInsert>;
-      if (field === "phoneRaw") set.phoneNorm = normalizePhone(v);
-      if (field === "email") set.emailNorm = v ? v.toLowerCase() : null;
+      if (choice === "sheet" && field === "name" && !v) throw new PermanentSyncError("A lead needs a name.");
       const cust = (lead.custom ?? {}) as Record<string, unknown> & { sheetBase?: Base };
-      await tx.update(L).set({
-        ...set, custom: { ...cust, sheetBase: { ...(cust.sheetBase ?? ({} as Base)), [field]: v } },
-        updatedAt: new Date(), updatedBy: userId, version: lead.version + 1,
-      }).where(eq(L.id, lead.id));
-      await tx.insert(schema.leadActivity).values({
-        leadId: lead.id, workspaceId, type: "edited", actorId: userId,
-        summary: `Took the sheet's ${field} after a difference: “${c.crmValue ?? ""}” → “${v ?? ""}”`, data: { field, from: c.crmValue, to: v },
-      });
+      // Either way the sheet's latest value becomes the recorded baseline, so the same difference is not raised again.
+      const base: Base = { name: lead.name, phoneRaw: lead.phoneRaw, email: lead.email, campaign: lead.campaign, source: lead.source, ...(cust.sheetBase ?? {}), [field]: v };
+      if (choice === "sheet") {
+        const set: Partial<typeof L.$inferInsert> = { [field]: v } as Partial<typeof L.$inferInsert>;
+        if (field === "phoneRaw") set.phoneNorm = normalizePhone(v);
+        if (field === "email") set.emailNorm = v ? v.toLowerCase() : null;
+        await tx.update(L).set({ ...set, custom: { ...cust, sheetBase: base }, updatedAt: new Date(), updatedBy: userId, version: lead.version + 1 }).where(eq(L.id, lead.id));
+        await tx.insert(schema.leadActivity).values({
+          leadId: lead.id, workspaceId, type: "edited", actorId: userId,
+          summary: `Took the sheet's ${field} after a difference: “${c.crmValue ?? ""}” → “${v ?? ""}”`, data: { field, from: c.crmValue, to: v },
+        });
+      } else {
+        await tx.update(L).set({ custom: { ...cust, sheetBase: base } }).where(eq(L.id, lead.id));
+      }
     }
     await tx.update(schema.syncConflict).set({ resolvedAt: new Date(), resolution: choice === "sheet" ? "used sheet value" : "kept CRM value" })
       .where(eq(schema.syncConflict.id, c.id));
@@ -84,10 +90,12 @@ export async function saveMapping(workspaceId: string, userId: string, mappingId
     const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(L).where(and(eq(L.connectionId, row.c.id), eq(L.sheetGid, row.m.sheetGid)));
     if (n > 0) throw new PermanentSyncError("Leads were already imported using the current id column. Changing it would duplicate them, so it is locked.");
   }
+  const contactPresent = input.contact.filter((h) => headers.includes(norm(h)));
+  if (!contactPresent.length) throw new PermanentSyncError("Pick at least one phone or email column that exists in the sheet. Leaving none would blank every lead's contact details.");
   const columnMap: ColumnMap = {
     externalId: input.externalId, name: input.name, acquiredAt: input.acquiredAt || undefined, campaign: input.campaign || undefined,
     source: input.source || undefined, owner: input.owner || undefined, sheetStatus: input.sheetStatus || undefined,
-    contact: input.contact.filter((h) => headers.includes(norm(h))),
+    contact: contactPresent,
   };
   // A changed mapping must be looked at again before it imports anything.
   await db.update(schema.worksheetMapping).set({ columnMap, headerRow, confirmedAt: null }).where(eq(schema.worksheetMapping.id, row.m.id));

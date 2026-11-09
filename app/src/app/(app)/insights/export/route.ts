@@ -4,7 +4,7 @@ import { byOwner, bySource, daily, parseFilters, toCsv } from "@/lib/insights";
 
 export const dynamic = "force-dynamic";
 
-/** CSV of exactly what the page shows, for the signed-in viewer's own scope. */
+/** CSV of the day-by-day, by-source and by-person tables, for the signed-in viewer's own scope. */
 export async function GET(req: Request) {
   const c = await getCtx();
   if (!c) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
