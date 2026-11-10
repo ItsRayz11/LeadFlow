@@ -106,6 +106,33 @@ export async function connectPickedAction(_p: R, fd: FormData): Promise<R> {
   try { return await connectTabs(await manager(), p.data.spreadsheetId, "pick", null, gids); } catch (e) { return fail(e); }
 }
 
+/**
+ * Saves the full tick-list of tabs for one spreadsheet: newly ticked tabs are connected, unticked tracked tabs are switched off.
+ * Tabs that stay ticked keep their mapping and keep syncing automatically.
+ */
+export async function saveTabsAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ connectionId: z.string().uuid() }).safeParse(Object.fromEntries(fd));
+  if (!p.success) return { error: "Invalid request." };
+  const ticked = new Set(fd.getAll("gid").map(String).filter((g) => /^\d{1,12}$/.test(g)));
+  try {
+    const c = await manager();
+    const [conn] = await db.select({ id: schema.spreadsheetConnection.id, s: schema.spreadsheetConnection.spreadsheetId }).from(schema.spreadsheetConnection)
+      .where(and(eq(schema.spreadsheetConnection.id, p.data.connectionId), eq(schema.spreadsheetConnection.workspaceId, c.workspaceId)));
+    if (!conn) return { error: "Connection not found." };
+    const maps = await db.select().from(schema.worksheetMapping).where(and(eq(schema.worksheetMapping.connectionId, conn.id), eq(schema.worksheetMapping.enabled, true)));
+    const have = new Set(maps.map((m) => m.sheetGid));
+    const stop = maps.filter((m) => !ticked.has(m.sheetGid));
+    const add = [...ticked].filter((g) => !have.has(g));
+    for (const m of stop) {
+      await db.update(schema.worksheetMapping).set({ enabled: false, confirmedAt: null }).where(eq(schema.worksheetMapping.id, m.id));
+      await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.stop_tab", entity: "worksheet_mapping", entityId: m.id, data: {} });
+    }
+    if (!add.length) return ok(stop.length ? `Stopped ${stop.length} tab${stop.length === 1 ? "" : "s"}. Leads already imported stay in the CRM.` : "No changes.");
+    const r = await connectTabs(c, conn.s, "pick", null, add);
+    return stop.length && r?.ok ? { ok: true, message: `${r.message ?? "Saved."} Stopped ${stop.length} other tab${stop.length === 1 ? "" : "s"}.` } : r;
+  } catch (e) { return fail(e); }
+}
+
 /** Looks at the spreadsheet again and connects any tabs that are not connected yet (for example tabs added since, or ones that did not fit last time). */
 export async function addTabsAction(_p: R, fd: FormData): Promise<R> {
   const p = z.object({ connectionId: z.string().uuid() }).safeParse(Object.fromEntries(fd));

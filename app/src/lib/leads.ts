@@ -65,11 +65,29 @@ export function segFilter(seg: Seg, tz: string): SQL | undefined {
   }
 }
 
-export async function listLeads(c: Ctx, seg: Seg, q: string) {
+/** Limits to leads imported from one worksheet tab (by its gid). Empty means every tab. */
+export function tabFilter(tab: string): SQL | undefined {
+  return /^\d{1,12}$/.test(tab) ? eq(L.sheetGid, tab) : undefined;
+}
+
+/** The tabs being tracked in this workspace, with how many leads each has in the caller's scope. */
+export async function trackedTabs(c: Ctx) {
+  const tabs = await db.select({ gid: schema.worksheetMapping.sheetGid, title: schema.worksheetMapping.sheetTitle })
+    .from(schema.worksheetMapping)
+    .innerJoin(schema.spreadsheetConnection, eq(schema.spreadsheetConnection.id, schema.worksheetMapping.connectionId))
+    .where(and(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId), eq(schema.worksheetMapping.enabled, true)))
+    .orderBy(schema.worksheetMapping.sheetTitle);
+  const n = await db.select({ gid: L.sheetGid, n: sql<number>`count(*)::int` }).from(L).where(scope(c)).groupBy(L.sheetGid);
+  const by = new Map(n.map((x) => [x.gid, x.n]));
+  return tabs.map((t) => ({ ...t, n: by.get(t.gid) ?? 0 }));
+}
+
+export async function listLeads(c: Ctx, seg: Seg, q: string, tab = "") {
   const search = q.trim();
   const digits = search.replace(/\D/g, "");
   const where = and(
     scope(c),
+    tabFilter(tab),
     segFilter(seg, c.tz),
     search
       ? or(ilike(L.name, `%${search}%`), digits.length >= 3 ? ilike(L.phoneNorm, `%${digits}%`) : undefined)
@@ -89,7 +107,7 @@ export async function listLeads(c: Ctx, seg: Seg, q: string) {
     .limit(200);
 }
 
-export async function segCounts(c: Ctx) {
+export async function segCounts(c: Ctx, tab = "") {
   const [r] = await db
     .select({
       all: sql<number>`count(*)::int`,
@@ -104,7 +122,7 @@ export async function segCounts(c: Ctx) {
       lost_interested: sql<number>`count(*) filter (where ${lost} and ${everInterested})::int`,
     })
     .from(L)
-    .where(scope(c));
+    .where(and(scope(c), tabFilter(tab)));
   return r as Record<Seg, number>;
 }
 

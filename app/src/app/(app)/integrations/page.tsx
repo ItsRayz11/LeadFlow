@@ -6,7 +6,7 @@ import { ActionForm, Submit } from "@/components/ActionForm";
 import { serviceAccountConfigured, serviceAccountEmail } from "@/lib/sheetsapi";
 import { parseSheetUrl } from "@/lib/sheetparse";
 import { fetchTabList } from "@/lib/sheetsync";
-import { aliasAction, conflictAction, confirmAllAction, connectPickedAction, addTabsAction, progressWritebackAction, sheetModeAction, stopTabAction, syncNowAction } from "./actions";
+import { aliasAction, conflictAction, confirmAllAction, connectPickedAction, addTabsAction, saveTabsAction, progressWritebackAction, sheetModeAction, stopTabAction, syncNowAction } from "./actions";
 import { MappingPanel } from "./MappingPanel";
 
 export const dynamic = "force-dynamic";
@@ -56,6 +56,12 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
     }
   }
 
+  // Live tick-list of every tab in each connected spreadsheet, so you never have to paste the link again.
+  const tabLists = await Promise.all(cards.map(async ({ cn, maps }) => {
+    try { return { cn, maps, tabs: await fetchTabList(cn.spreadsheetId), err: null as string | null }; }
+    catch (e) { return { cn, maps, tabs: [] as { gid: string; title: string }[], err: e instanceof Error ? e.message : "Tabs could not be listed." }; }
+  }));
+
   const connIds = conns.map((x) => x.id);
   const [{ imported }] = connIds.length
     ? await db.select({ imported: sql<number>`count(*)::int` }).from(schema.lead).where(inArray(schema.lead.connectionId, connIds))
@@ -88,8 +94,33 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             </li>
           ))}
         </ol>
-        <p className="sub">Optional: for instant updates when someone edits the sheet, paste the script from <code>docs/apps-script/lead-flow-sync.gs</code> into the sheet. Without it the sheet is still read every few minutes.</p>
+        <p className="sub">Optional: for instant updates when someone edits the sheet, paste the script from <code>docs/apps-script/lead-flow-sync.gs</code> into the sheet. The app also syncs every 10 minutes while it is open.</p>
       </section>
+
+      {tabLists.map(({ cn, maps, tabs, err }) => (
+        <section key={`tabs-${cn.id}`} className="panel glass">
+          <h2>Tabs being synced · {cn.title ?? "Google Sheet"} <span className="pill ok">{maps.length} tracked</span></h2>
+          {err ? <p className="err" role="alert">{err}</p> : (
+            <ActionForm action={saveTabsAction}>
+              <input type="hidden" name="connectionId" value={cn.id} />
+              <fieldset className="field" style={{ border: 0, padding: 0 }}>
+                <legend>Tick every tab you work in. Ticked tabs sync automatically, both ways, from now on.</legend>
+                {tabs.map((t) => {
+                  const m = maps.find((x) => x.sheetGid === t.gid);
+                  return (
+                    <label key={t.gid} style={{ display: "block", padding: "4px 0" }}>
+                      <input type="checkbox" name="gid" value={t.gid} defaultChecked={!!m} /> {t.title}
+                      {m && <span className={`pill ${m.confirmedAt ? "ok" : "warn"}`} style={{ marginLeft: 8 }}>{m.confirmedAt ? "Syncing" : "Needs confirm"}</span>}
+                    </label>
+                  );
+                })}
+              </fieldset>
+              <Submit pendingText="Saving tabs">Save tabs</Submit>
+              <p className="sub">Newly ticked tabs are checked first, then appear under “Needs confirm” below. Unticking a tab stops syncing it; its leads stay in the CRM.</p>
+            </ActionForm>
+          )}
+        </section>
+      ))}
 
       {cards.map(({ cn, maps, jobs }) => (
         <section key={cn.id} className="panel glass">

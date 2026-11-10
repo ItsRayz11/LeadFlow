@@ -2,7 +2,7 @@ import Link from "next/link";
 import { LeadLink } from "@/components/LeadLink";
 import { LeadViewToggle } from "@/components/LeadViewToggle";
 import { requireCtx, canWrite } from "@/lib/session";
-import { SEGS, listLeads, relTime, segCounts, type Seg } from "@/lib/leads";
+import { SEGS, listLeads, relTime, segCounts, trackedTabs, type Seg } from "@/lib/leads";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,10 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
   const seg = (SEGS.some(([k]) => k === one(sp.seg)) ? one(sp.seg) : "all") as Seg;
   const q = one(sp.q);
-  const [rows, counts] = await Promise.all([listLeads(c, seg, q), segCounts(c)]);
+  const tabs = await trackedTabs(c);
+  const tab = tabs.some((t) => t.gid === one(sp.tab)) ? one(sp.tab) : "";
+  const [rows, counts] = await Promise.all([listLeads(c, seg, q, tab), segCounts(c, tab)]);
+  const tabQ = tab ? `&tab=${tab}` : "";
   const now = Date.now();
 
   const due = (r: (typeof rows)[number]) =>
@@ -37,11 +40,20 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       <section className="panel glass">
         <form className="filters" action="/leads">
           <input type="hidden" name="seg" value={seg} />
+          {tab && <input type="hidden" name="tab" value={tab} />}
           <label className="field"><span>Search name or phone</span><input type="search" name="q" defaultValue={q} placeholder="Search" /></label>
         </form>
+        {tabs.length > 0 && (
+          <div className="seg" aria-label="Sheet tab">
+            <Link href={`/leads?seg=${seg}${q ? `&q=${encodeURIComponent(q)}` : ""}`} className={tab === "" ? "on" : ""}>All tabs</Link>
+            {tabs.map((t) => (
+              <Link key={t.gid} href={`/leads?seg=${seg}&tab=${t.gid}${q ? `&q=${encodeURIComponent(q)}` : ""}`} className={tab === t.gid ? "on" : ""}>{t.title} <span className="c">{t.n}</span></Link>
+            ))}
+          </div>
+        )}
         <div className="seg">
           {SEGS.map(([k, label]) => (
-            <Link key={k} href={`/leads?seg=${k}${q ? `&q=${encodeURIComponent(q)}` : ""}`} className={seg === k ? "on" : ""}>{label} <span className="c">{counts[k]}</span></Link>
+            <Link key={k} href={`/leads?seg=${k}${tabQ}${q ? `&q=${encodeURIComponent(q)}` : ""}`} className={seg === k ? "on" : ""}>{label} <span className="c">{counts[k]}</span></Link>
           ))}
         </div>
 
