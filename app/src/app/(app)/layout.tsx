@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { headers } from "next/headers";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { SideNav, TabBar } from "@/components/Nav";
@@ -7,6 +8,9 @@ import { auth } from "@/lib/auth";
 import { db, schema } from "@/db";
 import { count } from "drizzle-orm";
 import { scope } from "@/lib/leads";
+import { syncIfStale } from "@/lib/syncstale";
+
+export const maxDuration = 60;
 
 export default async function AppLayout({ children, modal }: { children: React.ReactNode; modal: React.ReactNode }) {
   const ctx = await getCtx();
@@ -32,6 +36,9 @@ export default async function AppLayout({ children, modal }: { children: React.R
     db.select({ n: sql<number>`count(*)::int` }).from(schema.notification)
       .where(and(eq(schema.notification.memberId, ctx.memberId), isNull(schema.notification.readAt))),
   ]);
+  // The scheduler only fires every few hours, so opening the app also refreshes a stale sheet in the background.
+  // syncConnection has its own overlap lock, so concurrent visitors cannot double-run it.
+  after(syncIfStale);
   const counts = { overdue: o.n, unread: u.n };
   const mgr = canManage(ctx);
   return (
