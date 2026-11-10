@@ -180,6 +180,8 @@ export async function syncNowAction(_p: R, fd: FormData): Promise<R> {
     if (!conn) return { error: "Connection not found." };
     const s = await syncConnection(conn.id, "manual", c.userId, Date.now() + 50_000);
     if (!s.ran) return { error: "A sync is already running for this sheet, or no worksheet is confirmed yet." };
+    // Read first, then send the CRM's own changes the other way (two-way connections only; a no-op otherwise). A failure here must not hide the sync result.
+    await pushConnection(conn.id, { deadline: Date.now() + 15_000 }).catch((e) => console.error("write-back after sync", e));
     if (s.partial) return ok(`Synced ${s.created} new so far. It did not finish in the time allowed and will continue on the next run.`);
     return ok(`Sync finished: ${s.created} new, ${s.updated} updated, ${s.progressed} progress updates from the sheet, ${s.assigned} assigned, ${s.skipped} skipped.`);
   } catch (e) { return fail(e); }

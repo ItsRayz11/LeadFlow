@@ -161,10 +161,11 @@ d("sheet ingestion (database)", () => {
   it("assigns existing unassigned leads once their owner name is known (backfill)", async () => {
     await db.delete(schema.identityAlias).where(eq(schema.identityAlias.alias, "Someone Else")); // leftover from an earlier run
     // Gus arrives with an unknown owner name, so he is imported unassigned.
-    body = [`Someone Else,,${id(13)},${today},camp,fb,Gus Thirteen,,,,,,FALSE`];
+    body = [`Someone Else,,${id(13)},${today},camp,fb,Gus Thirteen,,,🕒 24H Follow-up,,,FALSE`];
     await sync.syncConnection(connId, "manual");
     let gus = (await leads()).find((l) => l.externalId === id(13))!;
     expect(gus.ownerId).toBeNull();
+    expect(gus.followUpStep).toBe("h24");
     // The team links that name to a person. The already-imported lead is assigned right away, without waiting for a sheet change.
     const [m] = await db.select().from(schema.workspaceMember).where(eq(schema.workspaceMember.id, memberId));
     const ops = await import("@/lib/sheetops");
@@ -172,6 +173,10 @@ d("sheet ingestion (database)", () => {
     expect(r.assigned).toBeGreaterThanOrEqual(1);
     gus = (await leads()).find((l) => l.externalId === id(13))!;
     expect(gus.ownerId).toBe(memberId);
+    // He sits in the 24H stage, so linking his owner also gives him an open task, or he would never show in the follow-up lists.
+    const gusTasks = await db.select().from(schema.followUpTask).where(eq(schema.followUpTask.leadId, gus.id));
+    expect(gusTasks.filter((t) => t.status === "pending").map((t) => t.step)).toEqual(["h24"]);
+    expect(gus.nextFollowUpAt).not.toBeNull();
     // Linking again does not take a lead from someone who has it.
     const again = await ops.linkAlias(workspaceId, m.userId, "Someone Else", memberId);
     expect(again.assigned).toBe(0);

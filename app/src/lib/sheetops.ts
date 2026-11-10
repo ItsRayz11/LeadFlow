@@ -38,6 +38,18 @@ export async function linkAlias(workspaceId: string, userId: string, aliasRaw: s
       summary: `Assigned because “${alias}” in the sheet was linked to this person`, idempotencyKey: `assign:alias:${a.id}`,
     }))).onConflictDoNothing();
   }
+  // Leads that already sit in a follow-up stage need an open task to show in the follow-up lists. Due later today, never overdue.
+  const staged = assigned.length
+    ? await db.select({ id: L.id, step: L.followUpStep }).from(L).where(and(inArray(L.id, assigned.map((a) => a.id)), isNull(L.closedAt), inArray(L.followUpStep, ["contact_started", "h24", "h48", "final"])))
+    : [];
+  const due = new Date(Date.now() + 2 * 3600e3);
+  for (let i = 0; i < staged.length; i += 200) {
+    const made = await db.insert(schema.followUpTask).values(staged.slice(i, i + 200).map((x) => ({
+      workspaceId, leadId: x.id, step: x.step as "contact_started" | "h24" | "h48" | "final", dueAt: due, ownerId: m.id,
+      priority: "normal" as const, createdBy: "sheet-sync", dedupeKey: `${x.id}:${x.step}:sheet`,
+    }))).onConflictDoNothing().returning({ leadId: schema.followUpTask.leadId });
+    if (made.length) await db.update(L).set({ nextFollowUpAt: due }).where(inArray(L.id, made.map((x) => x.leadId)));
+  }
   await db.insert(schema.auditLog).values({ workspaceId, actorId: userId, action: "sheet.alias", entity: "identity_alias", data: { alias, memberId: m.id, assigned: assigned.length } });
   return { assigned: assigned.length };
 }

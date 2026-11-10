@@ -246,7 +246,11 @@ export async function applyProgress(tx: Tx, conn: typeof schema.spreadsheetConne
         said.push(`closed as ${plan.closeAs.replace("_", " ")}`);
       }
     } else {
-      if (lead.closedAt) { Object.assign(set, { closedAt: null, outcome: null, closureReason: null, convertedAt: null }); said.push("reopened"); }
+      if (lead.closedAt) {
+        Object.assign(set, { closedAt: null, outcome: null, closureReason: null, convertedAt: null }); said.push("reopened");
+        // A reopened lead must not stay at "completed": the sheet's stage wins, otherwise it starts again at the first step.
+        if (!plan.step && lead.followUpStep === "completed") { set.followUpStep = "contact_started"; stepSet = "contact_started"; }
+      }
       if (plan.status && plan.status !== lead.status) { set.status = plan.status; said.push(`status ${plan.status.replace("_", " ")}`); }
       if (plan.step && plan.step !== lead.followUpStep) { set.followUpStep = plan.step; said.push(STEP_LABEL[plan.step]); }
       if (plan.step && OPEN_STEPS.has(plan.step)) stepSet = plan.step; // also when it equals the default stage: the lead still needs its task
