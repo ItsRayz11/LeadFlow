@@ -7,7 +7,7 @@ import { requireCtx } from "@/lib/session";
 import { fromZonedTime } from "date-fns-tz";
 import { DEFAULT_COLUMN_MAP, parseSheetUrl, parseWorksheet } from "@/lib/sheetparse";
 import { BudgetError, PermanentSyncError, fetchTabList, fetchWorksheetCsv, syncConnection } from "@/lib/sheetsync";
-import { linkAlias, resolveFieldConflict, saveMapping, setSyncMode } from "@/lib/sheetops";
+import { linkAlias, resolveFieldConflict, saveMapping, setProgressWriteback, setSyncMode } from "@/lib/sheetops";
 import { pushConnection } from "@/lib/sheetwrite";
 import { after } from "next/server";
 import type { R } from "../actions";
@@ -31,7 +31,7 @@ const ok = (message: string): R => { revalidatePath("/integrations"); revalidate
  * Connects one tab (scope "tab") or every tab not yet connected (scope "all"). Tabs without the expected columns are reported, never half-connected.
  * A spreadsheet with many tabs is connected in batches that fit the time limit; running it again continues with the rest.
  */
-async function connectTabs(c: Awaited<ReturnType<typeof manager>>, spreadsheetId: string, scope: "tab" | "all", gid: string | null): Promise<R> {
+async function connectTabs(c: Awaited<ReturnType<typeof manager>>, spreadsheetId: string, scope: "tab" | "all" | "pick", gid: string | null, picked: string[] = []): Promise<R> {
   const deadline = Date.now() + 50_000;
   let tabs: { gid: string; title: string }[];
   const [existing] = await db.select({ id: schema.spreadsheetConnection.id }).from(schema.spreadsheetConnection)
@@ -44,6 +44,10 @@ async function connectTabs(c: Awaited<ReturnType<typeof manager>>, spreadsheetId
     const all = await fetchTabList(spreadsheetId);
     tabs = all.filter((t) => !have.has(t.gid));
     if (!tabs.length) return { error: `All ${all.length} tab${all.length === 1 ? " is" : "s are"} already connected.` };
+  } else if (scope === "pick") {
+    const all = await fetchTabList(spreadsheetId);
+    tabs = all.filter((t) => picked.includes(t.gid) && !have.has(t.gid));
+    if (!tabs.length) return { error: "Choose at least one tab that is not connected yet." };
   } else {
     const known = await fetchTabList(spreadsheetId).catch(() => []);
     tabs = [{ gid: gid!, title: known.find((t) => t.gid === gid)?.title ?? `Worksheet ${gid}` }];
@@ -91,6 +95,15 @@ export async function connectSheetAction(_p: R, fd: FormData): Promise<R> {
   if (!p.success || !parsed) return { error: "Paste a Google Sheets link (https://docs.google.com/spreadsheets/d/…)." };
   if (p.data.scope === "tab" && !parsed.gid) return { error: "To track one tab, open that tab and paste the full link; it must contain gid=…" };
   try { return await connectTabs(await manager(), parsed.spreadsheetId, p.data.scope, parsed.gid); } catch (e) { return fail(e); }
+}
+
+/** Connects exactly the tabs ticked in the picker. */
+export async function connectPickedAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ spreadsheetId: z.string().regex(/^[A-Za-z0-9_-]{20,100}$/) }).safeParse(Object.fromEntries(fd));
+  const gids = fd.getAll("gid").map(String).filter((g) => /^\d{1,12}$/.test(g)).slice(0, 60);
+  if (!p.success) return { error: "Invalid request." };
+  if (!gids.length) return { error: "Tick at least one tab." };
+  try { return await connectTabs(await manager(), p.data.spreadsheetId, "pick", null, gids); } catch (e) { return fail(e); }
 }
 
 /** Looks at the spreadsheet again and connects any tabs that are not connected yet (for example tabs added since, or ones that did not fit last time). */
@@ -203,6 +216,18 @@ export async function sheetModeAction(_p: R, fd: FormData): Promise<R> {
     return ok(p.data.mode === "two_way"
       ? "Two-way sync is on. Edits in the CRM are written to the sheet, and the sheet's edits keep coming in."
       : "Back to read-only. The sheet is no longer written to.");
+  } catch (e) { return fail(e); }
+}
+
+export async function progressWritebackAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ connectionId: z.string().uuid(), on: z.enum(["1", "0"]) }).safeParse(Object.fromEntries(fd));
+  if (!p.success) return { error: "Invalid request." };
+  try {
+    const c = await manager();
+    await setProgressWriteback(c.workspaceId, c.userId, p.data.connectionId, p.data.on === "1");
+    return ok(p.data.on === "1"
+      ? "Status and follow-up stage will now be written to the sheet when they change in the CRM."
+      : "Status and follow-up stage are no longer written to the sheet. They are still read from it.");
   } catch (e) { return fail(e); }
 }
 

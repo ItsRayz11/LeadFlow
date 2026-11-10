@@ -2,8 +2,9 @@ import Link from "next/link";
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { canManage, requireCtx } from "@/lib/session";
+import { Pipeline } from "@/components/Pipeline";
 import {
-  PERIODS, bySource, byOwner, daily, milestones, parseFilters, snapshot, sourceOptions, summary, type Filters,
+  PERIODS, bySource, byOwner, daily, milestones, parseFilters, pipeline, snapshot, sourceOptions, summary, type Filters,
 } from "@/lib/insights";
 
 export const dynamic = "force-dynamic";
@@ -40,8 +41,8 @@ export default async function Insights({ searchParams }: { searchParams: Promise
   const f = parseFilters(c, { period: one(sp.period), owner: one(sp.owner), source: one(sp.source) });
   const mgr = canManage(c);
 
-  const [cur, prev, snap, days, owners, sources, ms, srcOpts, members] = await Promise.all([
-    summary(c, f, 0), summary(c, f, 1), snapshot(c, f), daily(c, f), byOwner(c, f), bySource(c, f), milestones(c, f), sourceOptions(c),
+  const [cur, prev, snap, days, owners, sources, ms, srcOpts, pipe, members] = await Promise.all([
+    summary(c, f, 0), summary(c, f, 1), snapshot(c, f), daily(c, f), byOwner(c, f), bySource(c, f), milestones(c, f), sourceOptions(c), pipeline(c, f),
     mgr ? db.select({ id: schema.workspaceMember.id, name: schema.workspaceMember.displayName }).from(schema.workspaceMember)
       .where(and(eq(schema.workspaceMember.workspaceId, c.workspaceId), eq(schema.workspaceMember.active, true))) : Promise.resolve([]),
   ]);
@@ -77,6 +78,8 @@ export default async function Insights({ searchParams }: { searchParams: Promise
         <section className="panel glass"><h2>Nothing to show yet</h2>
           <p className="sub">Numbers appear as soon as leads are added or imported from the sheet. Nothing here is estimated.</p></section>
       )}
+
+      <Pipeline p={pipe} />
 
       <section className="panel glass">
         <h2>{periodLabel}</h2>

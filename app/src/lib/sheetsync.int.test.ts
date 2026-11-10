@@ -196,6 +196,23 @@ d("sheet ingestion (database)", () => {
     expect(d.followUpStep).toBe("h24");
   });
 
+  it("an unrelated change in the row does not undo a CRM status the sheet has no wording for", async () => {
+    const ivy = () => leads().then((r) => r.find((l) => l.externalId === id(20))!);
+    const row = (note: string) => `📄 ${memberName},⭐ Interested,${id(20)},${today},camp,fb,Ivy Twenty,,,🕒 24H Follow-up,${note},,FALSE`;
+    body = [row("Note one")];
+    await sync.syncConnection(connId, "manual");
+    let l = await ivy();
+    expect(l.status).toBe("interested");
+    // The team moves the lead to a status the sheet has no wording for; the write-back would record that as already agreed.
+    await db.update(schema.lead).set({ status: "proposal_sent", custom: { ...(l.custom as object), progressBase: { status: "proposal_sent", step: "h24", closed: false } } }).where(eq(schema.lead.id, l.id));
+    body = [row("Note two")]; // only the notes column changes in the sheet
+    await sync.syncConnection(connId, "manual");
+    l = await ivy();
+    expect(l.status).toBe("proposal_sent");
+    const acts = await db.select().from(schema.leadActivity).where(eq(schema.leadActivity.leadId, l.id));
+    expect(acts.some((a) => a.summary === "Note from the sheet: Note two")).toBe(true);
+  });
+
   it("an unreadable (private) sheet is reported and marks the connection unhealthy", async () => {
     vi.stubGlobal("fetch", async () => new Response("<html>sign in</html>", { status: 200, headers: { "content-type": "text/html" } }));
     await sync.syncConnection(connId, "cron");

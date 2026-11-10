@@ -35,6 +35,7 @@ export async function logOutcomeAction(_p: R, fd: FormData): Promise<R> {
   try {
     const ctx = await requireCtx();
     const r = await recordOutcome(ctx, { ...p.data, nextAt: p.data.nextAt ? new Date(p.data.nextAt) : null });
+    if (!r.duplicate) after(() => pushLeadNow(p.data.leadId)); // the lead's stage may have moved: tell a two-way sheet
     return done(r.duplicate ? "Already saved." : "Saved.");
   } catch (e) { return fail(e); }
 }
@@ -65,6 +66,7 @@ export async function closeAction(_p: R, fd: FormData): Promise<R> {
   try {
     const ctx = await requireCtx();
     await closeLead(ctx, p.data);
+    after(() => pushLeadNow(p.data.leadId));
     return done("Lead closed.");
   } catch (e) { return fail(e); }
 }
@@ -75,6 +77,7 @@ export async function reopenAction(_p: R, fd: FormData): Promise<R> {
   try {
     const ctx = await requireCtx();
     await reopenLead(ctx, p.data);
+    after(() => pushLeadNow(p.data.leadId));
     return done("Lead reopened.");
   } catch (e) { return fail(e); }
 }

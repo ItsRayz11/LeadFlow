@@ -18,6 +18,8 @@ Notes
 - Priority order: Follow-up reliability → Data integrity → Mobile usability → Team accountability → Sheets sync → Premium design → AI.
 - Default timezone: Asia/Karachi. Store UTC.
 - Sheets mode default: read-only import. Two-way write-back exists (service account, Editor access) but stays off per connection until a manager turns it on in Integrations; approved by the owner 2026-11-10. Setup: GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_PRIVATE_KEY, SHEET_WEBHOOK_SECRET; Apps Script in docs/apps-script/.
+- Sheet progress (owner, Status, Lead Follow Up stage, Card Status, Notes) is imported into the CRM; a CRM edit always wins. Writing status and follow-up stage back is a separate per-connection switch (off until a manager turns it on, after checking the import). Both-sides changes become a "progress" difference to settle on Integrations.
+- Dashboard: Insights and Overview show where leads stand (interested, converted, dropped after interest). "Interested" is counted from logged outcomes and sheet statuses; a lead closed straight from the sheet with no earlier interest on record counts as lost, not dropped-after-interest.
 - Serverless caveat: sync and reminder jobs must be idempotent and short; use cron + DB-backed job table (no in-memory schedulers).
 
 ## Open blockers / decisions needed

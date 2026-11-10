@@ -6,7 +6,8 @@ import { db, schema } from "@/db";
 import { dbTx, type Tx } from "@/db/tx";
 import { notify } from "@/lib/notify";
 import { dueFor, readSettings } from "@/lib/schedule";
-import { mayApplyProgress, planProgress, type ProgressBase } from "@/lib/sheetprogress";
+import { clean, mayApplyProgress, planProgress, stateOf, type ProgressBase } from "@/lib/sheetprogress";
+import { sheetText, type Seen } from "@/lib/sheetlabels";
 import { SheetsAccessError, SheetsTransientError, listTabsApi, readTableApi, serviceAccountConfigured } from "@/lib/sheetsapi";
 import { DEFAULT_COLUMN_MAP, parseCsv, parseTabList, parseWorksheet, type ColumnMap, type ParsedRow } from "@/lib/sheetparse";
 
@@ -19,8 +20,10 @@ export const SOURCE_FIELDS = ["name", "phoneRaw", "email", "campaign", "source"]
 export type SourceField = (typeof SOURCE_FIELDS)[number];
 export type Base = Record<SourceField, string | null>;
 
+/** Bump when the importer learns to read something new: every row is then read once more, and nothing else changes. */
+const HASH_VERSION = 3;
 const hashRow = (r: ParsedRow) =>
-  createHash("sha256").update(JSON.stringify([r.name, r.phoneRaw, r.email, r.campaign, r.source, r.sheetStatus, r.ownerAlias, r.progress])).digest("hex").slice(0, 32);
+  createHash("sha256").update(JSON.stringify([HASH_VERSION, r.name, r.phoneRaw, r.email, r.campaign, r.source, r.sheetStatus, r.ownerAlias, r.progress])).digest("hex").slice(0, 32);
 const baseOf = (r: ParsedRow): Base => ({ name: r.name, phoneRaw: r.phoneRaw, email: r.email, campaign: r.campaign, source: r.source });
 
 export class PermanentSyncError extends Error {}
@@ -81,9 +84,10 @@ async function fetchCsv(spreadsheetId: string, gid: string, deadline?: number): 
 
 /** Lists the tabs of a link-shared spreadsheet (needs no credentials). Throws a clear error when the sheet is private or the list cannot be found. */
 export async function fetchTabList(spreadsheetId: string): Promise<{ gid: string; title: string }[]> {
+  let apiMessage: string | null = null;
   if (serviceAccountConfigured()) {
     try { const tabs = await listTabsApi(spreadsheetId, undefined, true); if (tabs.length) return tabs; }
-    catch (e) { if (!(e instanceof SheetsAccessError)) throw apiFailure(e); } // not shared with the service account: try the public page
+    catch (e) { if (!(e instanceof SheetsAccessError)) throw apiFailure(e); apiMessage = e.message; } // not shared with the service account: try the public page
   }
   const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/htmlview`;
   let res: Response;
@@ -91,7 +95,7 @@ export async function fetchTabList(spreadsheetId: string): Promise<{ gid: string
   catch { throw new Error("Google could not be reached. Try again."); }
   const html = res.ok ? (await res.text()).slice(0, 3 * 1024 * 1024) : "";
   const tabs = parseTabList(html);
-  if (!tabs.length) throw new PermanentSyncError("Could not list the tabs of this sheet. Make sure it is shared as “anyone with the link can view”, or connect one tab at a time.");
+  if (!tabs.length) throw new PermanentSyncError(apiMessage ?? "Could not list the tabs of this sheet. Make sure it is shared as “anyone with the link can view”, or connect one tab at a time.");
   return tabs;
 }
 
@@ -203,12 +207,12 @@ const STEP_LABEL: Record<string, string> = { contact_started: "Contact started",
  * card milestones and notes. Rules: a CRM edit always wins (see mayApplyProgress); milestones only ever get added; notes are added
  * to the timeline, never overwritten; no notification is sent, so a backfill cannot flood anyone.
  */
-async function applyProgress(tx: Tx, conn: typeof schema.spreadsheetConnection.$inferSelect, leadId: string, r: ParsedRow, resolve: Resolver, now: Date, out: { assigned: number; progressed: number }) {
+export async function applyProgress(tx: Tx, conn: typeof schema.spreadsheetConnection.$inferSelect, leadId: string, r: ParsedRow, resolve: Resolver, now: Date, out: { assigned: number; progressed: number; conflicts?: number }, opts: { forced?: boolean } = {}) {
   const [lead] = await tx.select().from(L).where(eq(L.id, leadId)).for("update");
   if (!lead) return;
   const set: Partial<typeof L.$inferInsert> = {};
   const said: string[] = [];
-  const cust = (lead.custom ?? {}) as Record<string, unknown> & { progressBase?: ProgressBase };
+  const cust = (lead.custom ?? {}) as Record<string, unknown> & { progressBase?: ProgressBase; sheetProgress?: Seen };
 
   let ownerId = lead.ownerId;
   if (!ownerId) {
@@ -223,9 +227,15 @@ async function applyProgress(tx: Tx, conn: typeof schema.spreadsheetConnection.$
   }
 
   const plan = planProgress({ status: r.sheetStatus, stage: r.progress.stage, card: r.progress.card, salesQualified: r.progress.salesQualified, completedMeeting: r.progress.completedMeeting, onboarded: r.progress.onboarded });
-  const base = cust.progressBase;
+  // "forced" is a person choosing the sheet's value for a difference: treat the lead as still matching, so the sheet's state is applied.
+  const base = opts.forced ? stateOf(lead) : cust.progressBase;
   const sheetHasState = !!(plan.status || plan.step || plan.closeAs);
-  const canApply = sheetHasState && mayApplyProgress(lead, base);
+  // What the sheet's two cells said when the CRM last matched them. The sheet's progress is applied only when those cells changed (or on first
+  // sight), never because some other column of the row changed: otherwise an unrelated edit would undo a CRM status the sheet has no wording for.
+  const seen: Seen = { status: r.sheetStatus ?? "", stage: r.progress.stage ?? "" };
+  const t0 = cust.sheetProgress;
+  const sheetMoved = !!t0 && (clean(seen.status) !== clean(t0.status) || clean(seen.stage) !== clean(t0.stage));
+  const canApply = sheetHasState && mayApplyProgress(lead, base) && (!t0 || sheetMoved || !!opts.forced);
   let stepSet: string | null = null;
   if (canApply) {
     if (plan.closeAs) {
@@ -238,7 +248,8 @@ async function applyProgress(tx: Tx, conn: typeof schema.spreadsheetConnection.$
     } else {
       if (lead.closedAt) { Object.assign(set, { closedAt: null, outcome: null, closureReason: null, convertedAt: null }); said.push("reopened"); }
       if (plan.status && plan.status !== lead.status) { set.status = plan.status; said.push(`status ${plan.status.replace("_", " ")}`); }
-      if (plan.step && plan.step !== lead.followUpStep) { set.followUpStep = plan.step; stepSet = plan.step; said.push(STEP_LABEL[plan.step]); }
+      if (plan.step && plan.step !== lead.followUpStep) { set.followUpStep = plan.step; said.push(STEP_LABEL[plan.step]); }
+      if (plan.step && OPEN_STEPS.has(plan.step)) stepSet = plan.step; // also when it equals the default stage: the lead still needs its task
     }
   }
   for (const m of plan.milestones) if (!lead[m]) { set[m] = now; said.push(m.replace(/At$/, "").replace(/([A-Z])/g, " $1").toLowerCase()); }
@@ -262,8 +273,21 @@ async function applyProgress(tx: Tx, conn: typeof schema.spreadsheetConnection.$
   const sourceState = { status: (set.status as string | undefined) ?? lead.status, step: (set.followUpStep as string | undefined) ?? lead.followUpStep, closed: closedNow };
   const applied = said.length > 0;
   const flags = { salesQualified: plan.flags.salesQualified, completedMeeting: plan.flags.completedMeeting, onboarded: plan.flags.onboarded, referralCode: r.progress.referralCode, cardStatus: r.progress.card };
+
+  // The recorded cells move only when the CRM followed the sheet (or on first sight) or the CRM already matches them, so a change made on
+  // both sides stays visible and becomes a difference for a person to settle, never a silent overwrite.
+  const nextT0 = canApply || !t0 || (sheetMoved && mayApplyProgress(lead, base)) ? seen : t0;
+  if (base && t0 && sheetMoved && !canApply && !opts.forced) {
+    const crmText = `${lead.status.replace("_", " ")} | ${STEP_LABEL[lead.followUpStep] ?? lead.followUpStep}`;
+    const open = await tx.select().from(schema.syncConflict).where(and(eq(schema.syncConflict.leadId, lead.id), eq(schema.syncConflict.field, "progress"), isNull(schema.syncConflict.resolvedAt)));
+    if (!open.some((o) => o.sheetValue === sheetText(seen) && o.crmValue === crmText)) {
+      if (open.length) await tx.update(schema.syncConflict).set({ resolvedAt: now, resolution: "superseded by a newer difference" }).where(inArray(schema.syncConflict.id, open.map((o) => o.id)));
+      await tx.insert(schema.syncConflict).values({ connectionId: conn.id, leadId: lead.id, field: "progress", sheetValue: sheetText(seen), crmValue: crmText });
+      if (out.conflicts !== undefined) out.conflicts++;
+    }
+  }
   // The baseline records what the sheet last gave the CRM. It moves only when the CRM still matched it, so a CRM edit is never overwritten.
-  const newCustom = { ...cust, sheetFlags: flags, ...(canApply ? { progressBase: sourceState } : {}) };
+  const newCustom = { ...cust, ...(opts.forced ? {} : { sheetFlags: flags }), sheetProgress: nextT0, ...(canApply ? { progressBase: sourceState } : {}) };
   const changed = Object.keys(set).length > 0;
   if (changed || JSON.stringify(newCustom) !== JSON.stringify(cust)) {
     await tx.update(L).set({ ...set, custom: newCustom, updatedAt: changed ? now : lead.updatedAt, updatedBy: changed ? "sheet-sync" : lead.updatedBy, version: changed ? lead.version + 1 : lead.version }).where(eq(L.id, lead.id));
@@ -272,10 +296,11 @@ async function applyProgress(tx: Tx, conn: typeof schema.spreadsheetConnection.$
     out.progressed++;
     await tx.insert(schema.leadActivity).values({
       leadId: lead.id, workspaceId: conn.workspaceId, type: "synced", actorId: null, summary: `Progress from the sheet: ${said.join(", ")}`,
+      data: { status: sourceState.status, step: sourceState.step, closed: sourceState.closed },
       idempotencyKey: `progress:${lead.id}:${hashRow(r)}`,
     }).onConflictDoNothing();
   }
-  const note = r.progress.notes?.trim();
+  const note = opts.forced ? null : r.progress.notes?.trim();
   if (note) {
     await tx.insert(schema.leadActivity).values({
       leadId: lead.id, workspaceId: conn.workspaceId, type: "note", actorId: null, summary: `Note from the sheet: ${note}`,

@@ -33,10 +33,21 @@ export async function overviewMetrics(c: Ctx) {
   return r;
 }
 
-export type Seg = "all" | "new_today" | "unassigned" | "active" | "closed" | "overdue";
+/**
+ * A lead showed interest if it is interested now, or its history says it was at some point (an outcome logged as interested, or a status
+ * that moved to interested, whether typed in the CRM or brought in from the sheet). This is what makes "dropped after interest" countable.
+ */
+export const everInterested = sql`(${L.status} in ('interested', 'proposal_sent', 'converted') or exists (
+  select 1 from lead_activity a where a.lead_id = ${L.id}
+    and (a.outcome = 'interested' or a.data->>'status' = 'interested' or a.data->'changes'->'status'->>'to' = 'interested')))`;
+/** Closed without converting. */
+export const lost = sql`(${L.closedAt} is not null and coalesce(${L.outcome}::text, '') <> 'converted')`;
+
+export type Seg = "all" | "new_today" | "unassigned" | "active" | "closed" | "overdue" | "interested" | "converted" | "lost" | "lost_interested";
 export const SEGS: [Seg, string][] = [
   ["all", "All"], ["new_today", "New today"], ["unassigned", "Unassigned"],
-  ["overdue", "Overdue"], ["active", "Active"], ["closed", "Closed"],
+  ["overdue", "Overdue"], ["active", "Active"], ["interested", "Interested"], ["converted", "Converted"],
+  ["lost_interested", "Dropped after interest"], ["lost", "Lost"], ["closed", "Closed"],
 ];
 
 export function segFilter(seg: Seg, tz: string): SQL | undefined {
@@ -46,6 +57,10 @@ export function segFilter(seg: Seg, tz: string): SQL | undefined {
     case "overdue": return sql`${L.closedAt} is null and ${L.nextFollowUpAt} < now()`;
     case "active": return isNull(L.closedAt);
     case "closed": return sql`${L.closedAt} is not null`;
+    case "interested": return sql`${L.closedAt} is null and ${L.status} in ('interested', 'proposal_sent')`;
+    case "converted": return sql`${L.status} = 'converted'`;
+    case "lost": return lost;
+    case "lost_interested": return sql`${lost} and ${everInterested}`;
     default: return undefined;
   }
 }
@@ -83,6 +98,10 @@ export async function segCounts(c: Ctx) {
       overdue: sql<number>`count(*) filter (where ${L.closedAt} is null and ${L.nextFollowUpAt} < now())::int`,
       active: sql<number>`count(*) filter (where ${L.closedAt} is null)::int`,
       closed: sql<number>`count(*) filter (where ${L.closedAt} is not null)::int`,
+      interested: sql<number>`count(*) filter (where ${L.closedAt} is null and ${L.status} in ('interested', 'proposal_sent'))::int`,
+      converted: sql<number>`count(*) filter (where ${L.status} = 'converted')::int`,
+      lost: sql<number>`count(*) filter (where ${lost})::int`,
+      lost_interested: sql<number>`count(*) filter (where ${lost} and ${everInterested})::int`,
     })
     .from(L)
     .where(scope(c));

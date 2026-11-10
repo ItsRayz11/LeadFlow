@@ -1,10 +1,12 @@
-import { and, desc, eq, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { db, schema } from "@/db";
 import { canManage, requireCtx } from "@/lib/session";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { serviceAccountConfigured, serviceAccountEmail } from "@/lib/sheetsapi";
-import { aliasAction, conflictAction, confirmAllAction, connectSheetAction, addTabsAction, sheetModeAction, stopTabAction, syncNowAction } from "./actions";
+import { parseSheetUrl } from "@/lib/sheetparse";
+import { fetchTabList } from "@/lib/sheetsync";
+import { aliasAction, conflictAction, confirmAllAction, connectPickedAction, addTabsAction, progressWritebackAction, sheetModeAction, stopTabAction, syncNowAction } from "./actions";
 import { MappingPanel } from "./MappingPanel";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +17,9 @@ const fmt = (d: Date | null, tz: string) => (d ? d.toLocaleString([], { timeZone
 
 export default async function IntegrationsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const c = await requireCtx();
-  const previewId = (await searchParams).preview;
+  const sp = await searchParams;
+  const previewId = sp.preview;
+  const sheetParam = typeof sp.sheet === "string" ? sp.sheet.trim() : "";
   if (!canManage(c)) notFound();
   const conns = await db.select().from(schema.spreadsheetConnection).where(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId));
   const members = await db.select({ id: schema.workspaceMember.id, name: schema.workspaceMember.displayName, role: schema.workspaceMember.role })
@@ -38,9 +42,54 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
     jobs: await db.select().from(schema.syncJob).where(eq(schema.syncJob.connectionId, cn.id)).orderBy(desc(schema.syncJob.startedAt)).limit(8),
   })));
 
+  // Tab picker: list the tabs of the pasted spreadsheet, marking the ones already tracked.
+  let picker: { spreadsheetId: string; tabs: { gid: string; title: string }[]; have: Set<string>; linked: string | null } | { error: string } | null = null;
+  if (sheetParam) {
+    const parsed = parseSheetUrl(sheetParam);
+    if (!parsed) picker = { error: "That does not look like a Google Sheets link. Copy the address from your browser (https://docs.google.com/spreadsheets/d/…)." };
+    else {
+      try {
+        const tabs = await fetchTabList(parsed.spreadsheetId);
+        const mine = cards.find((x) => x.cn.spreadsheetId === parsed.spreadsheetId);
+        picker = { spreadsheetId: parsed.spreadsheetId, tabs, have: new Set((mine?.maps ?? []).map((m) => m.sheetGid)), linked: parsed.gid };
+      } catch (e) { picker = { error: e instanceof Error ? e.message : "The tabs could not be listed." }; }
+    }
+  }
+
+  const connIds = conns.map((x) => x.id);
+  const [{ imported }] = connIds.length
+    ? await db.select({ imported: sql<number>`count(*)::int` }).from(schema.lead).where(inArray(schema.lead.connectionId, connIds))
+    : [{ imported: 0 }];
+  const allMaps = cards.flatMap((x) => x.maps);
+  const confirmedN = allMaps.filter((m) => m.confirmedAt).length;
+  const twoWay = conns.some((x) => x.mode === "two_way");
+  const writesProgress = allMaps.some((m) => (m.valueMaps as { writeProgress?: boolean } | null)?.writeProgress === true);
+  const steps = [
+    { done: !!saEmail, title: "Let the app reach your Google Sheet", body: saEmail ? <>Done. The app signs in as <strong>{saEmail}</strong>. Share each sheet with that address as <strong>Editor</strong>.</> : "Ask the person who runs the server to add the Google service account settings. Until then only link-shared sheets can be read." },
+    { done: allMaps.length > 0, title: "Choose the tab you work in", body: allMaps.length ? `Tracking ${allMaps.length} tab${allMaps.length === 1 ? "" : "s"}.` : "Paste your sheet link under “Choose tabs to track” below, then tick the tab (or tabs) assigned to you." },
+    { done: confirmedN > 0, title: "Check the columns, then import", body: confirmedN ? `${imported} lead${imported === 1 ? "" : "s"} imported. Their owner, status, follow-up stage, card steps and notes come with them.` : "Open the preview on your tab, check the columns look right, and press confirm. Existing progress in the sheet is imported, so you do not start from scratch." },
+    { done: confirmedN > 0 && aliases.length === 0, title: "Match names in the sheet to your team", body: aliases.length ? `${aliases.length} name${aliases.length === 1 ? "" : "s"} in the sheet match nobody yet. Link them below and those leads are assigned straight away.` : confirmedN ? "Every owner name in the sheet is matched." : "Appears after the first import." },
+    { done: twoWay, title: "Turn on two-way sync", body: twoWay ? "On. Edits to name, phone, email, campaign and source go to the sheet." : "Do this after the import looks right. Edits you make in the CRM are then written to the sheet." },
+    { done: writesProgress, title: "Also write status and follow-up stage back", body: writesProgress ? "On. Your sheet's Status and Lead Follow Up cells follow what you do in the CRM." : "Optional, after two-way is on. Your sheet's dropdowns will follow what you do in the CRM." },
+  ];
+  const nextStep = steps.findIndex((x) => !x.done);
+
   return (
     <>
       <header className="top"><div><h1>Integrations</h1><p>Google Sheets feeds new leads in. In two-way mode, edits made in the CRM are written back to the sheet. Leads are never deleted when a row disappears.</p></div></header>
+
+      <section className="panel glass" aria-labelledby="start-here">
+        <h2 id="start-here">Start here {nextStep === -1 ? <span className="pill ok">All set</span> : <span className="pill warn">Step {nextStep + 1} of {steps.length}</span>}</h2>
+        <ol className="plain" style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {steps.map((st, i) => (
+            <li key={st.title} style={{ display: "flex", gap: 10, padding: "8px 0", alignItems: "flex-start", opacity: st.done || i === nextStep ? 1 : 0.6 }}>
+              <span className={`pill ${st.done ? "ok" : i === nextStep ? "warn" : "mute"}`} aria-label={st.done ? "Done" : i === nextStep ? "Next" : "Later"}>{st.done ? "✓" : i + 1}</span>
+              <div><strong>{st.title}</strong>{i === nextStep && <span className="pill warn" style={{ marginLeft: 8 }}>Do this next</span>}<div className="sub">{st.body}</div></div>
+            </li>
+          ))}
+        </ol>
+        <p className="sub">Optional: for instant updates when someone edits the sheet, paste the script from <code>docs/apps-script/lead-flow-sync.gs</code> into the sheet. Without it the sheet is still read every few minutes.</p>
+      </section>
 
       {cards.map(({ cn, maps, jobs }) => (
         <section key={cn.id} className="panel glass">
@@ -79,6 +128,19 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               </p>
             </ActionForm>
           )}
+          {saEmail && cn.mode === "two_way" && (() => {
+            const on = maps.some((m) => (m.valueMaps as { writeProgress?: boolean } | null)?.writeProgress === true);
+            return (
+              <ActionForm action={progressWritebackAction}>
+                <input type="hidden" name="connectionId" value={cn.id} />
+                <input type="hidden" name="on" value={on ? "0" : "1"} />
+                <Submit className={on ? "btn ghost" : "btn"} pendingText="Saving">{on ? "Stop writing status and follow-up stage" : "Also write status and follow-up stage to the sheet"}</Submit>
+                <p className="sub">{on
+                  ? "The sheet's Status and Lead Follow Up cells follow the CRM, using the same wording and emoji your sheet already uses. If you both change a lead, it shows under “Differences”."
+                  : "Turn this on after you have checked the import. The CRM then updates the Status and Lead Follow Up cells, using your sheet's own wording."}</p>
+              </ActionForm>
+            );
+          })()}
           {maps.some((m) => m.confirmedAt) && (
             <ActionForm action={syncNowAction}><input type="hidden" name="connectionId" value={cn.id} /><Submit pendingText="Syncing">Sync now</Submit></ActionForm>
           )}
@@ -102,7 +164,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
           <p className="sub">Someone changed these in the CRM, and the sheet now says something else. Nothing is overwritten on either side until you choose. “Keep CRM value” also writes it to the sheet when two-way sync is on.</p>
           {diffs.map(({ c: d, lead }) => (
             <div key={d.id} className="set-row" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
-              <div><strong>{lead ?? "Lead"}</strong> · {d.field}<small>CRM: “{d.crmValue ?? ""}” · Sheet: “{d.sheetValue ?? ""}”</small></div>
+              <div><strong>{lead ?? "Lead"}</strong> · {d.field === "progress" ? "status and follow-up stage" : d.field}<small>CRM: “{d.crmValue ?? ""}” · Sheet: “{d.sheetValue ?? ""}”</small></div>
               <div style={{ display: "flex", gap: 8 }}>
                 {(["crm", "sheet"] as const).map((choice) => (
                   <ActionForm key={choice} action={conflictAction}>
@@ -135,17 +197,30 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       )}
 
       <section className="panel glass">
-        <h2>Connect a sheet</h2>
-        <ActionForm action={connectSheetAction}>
-          <fieldset className="field" style={{ border: 0, padding: 0 }}>
-            <legend>What should be tracked?</legend>
-            <label style={{ display: "block" }}><input type="radio" name="scope" value="all" defaultChecked /> The whole spreadsheet: every tab, with owners matched to your team</label>
-            <label style={{ display: "block" }}><input type="radio" name="scope" value="tab" /> Just one tab: open that tab first, then paste its link</label>
-          </fieldset>
-          <label className="field"><span>Google Sheets link (copy the address bar; for one tab it must end in gid=…)</span>
-            <input type="url" name="url" placeholder="https://docs.google.com/spreadsheets/d/…/edit?gid=…" required /></label>
-          <Submit pendingText="Checking">Connect</Submit>
-        </ActionForm>
+        <h2>Choose tabs to track</h2>
+        <form method="get" className="grid2" style={{ alignItems: "end" }}>
+          <label className="field"><span>1. Paste your Google Sheets link (any tab will do)</span>
+            <input type="url" name="sheet" defaultValue={sheetParam} placeholder="https://docs.google.com/spreadsheets/d/…" required /></label>
+          <div><button className="btn">Find tabs</button></div>
+        </form>
+        {picker && "error" in picker && <p className="err" role="alert">{picker.error}</p>}
+        {picker && "tabs" in picker && (
+          <ActionForm action={connectPickedAction}>
+            <input type="hidden" name="spreadsheetId" value={picker.spreadsheetId} />
+            <fieldset className="field" style={{ border: 0, padding: 0 }}>
+              <legend>2. Tick the tab(s) you want to track ({picker.tabs.length} found)</legend>
+              {picker.tabs.map((t) => (
+                <label key={t.gid} style={{ display: "block", opacity: picker.have.has(t.gid) ? 0.6 : 1 }}>
+                  <input type="checkbox" name="gid" value={t.gid} defaultChecked={picker.have.has(t.gid) || t.gid === picker.linked} disabled={picker.have.has(t.gid)} /> {t.title}
+                  {picker.have.has(t.gid) && <span className="sub"> · already tracked</span>}
+                  {t.gid === picker.linked && !picker.have.has(t.gid) && <span className="sub"> · the tab from your link</span>}
+                </label>
+              ))}
+            </fieldset>
+            <Submit pendingText="Checking the tabs">Track the ticked tabs</Submit>
+            <p className="sub">Each tab is checked for the expected columns first. Tabs that do not look like lead lists are reported and left out, never half-connected.</p>
+          </ActionForm>
+        )}
       </section>
     </>
   );

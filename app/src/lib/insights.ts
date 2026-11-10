@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "@/db";
-import { scope } from "@/lib/leads";
+import { everInterested, lost, scope } from "@/lib/leads";
 import type { Ctx } from "@/lib/session";
 
 const L = schema.lead;
@@ -84,6 +84,35 @@ export async function snapshot(c: Ctx, f: Filters) {
     overdue: sql<number>`count(*) filter (where ${L.closedAt} is null and ${L.nextFollowUpAt} < now())::int`,
   }).from(L).where(leadWhere(c, f));
   return r;
+}
+
+export type Pipeline = {
+  total: number; active: number; contacted: number; interestedEver: number; interestedNow: number; converted: number;
+  lost: number; lostAfterInterest: number; lostNotInterested: number; lostNoResponse: number; lostOther: number;
+  stages: { key: string; n: number }[]; statuses: { key: string; n: number }[]; reasons: { reason: string; n: number }[];
+};
+
+/** Where every lead in view stands right now, and how far each got. Not tied to the period: this is the whole funnel. */
+export async function pipeline(c: Ctx, f: Filters): Promise<Pipeline> {
+  const [a] = await db.select({
+    total: sql<number>`count(*)::int`,
+    active: sql<number>`count(*) filter (where ${L.closedAt} is null)::int`,
+    contacted: sql<number>`count(*) filter (where ${L.status} <> 'new' or ${L.firstContactedAt} is not null)::int`,
+    interestedEver: sql<number>`count(*) filter (where ${everInterested})::int`,
+    interestedNow: sql<number>`count(*) filter (where ${L.closedAt} is null and ${L.status} in ('interested', 'proposal_sent'))::int`,
+    converted: sql<number>`count(*) filter (where ${L.status} = 'converted')::int`,
+    lost: sql<number>`count(*) filter (where ${lost})::int`,
+    lostAfterInterest: sql<number>`count(*) filter (where ${lost} and ${everInterested})::int`,
+    lostNotInterested: sql<number>`count(*) filter (where ${lost} and ${L.status} = 'not_interested')::int`,
+    lostNoResponse: sql<number>`count(*) filter (where ${lost} and ${L.status} = 'no_response')::int`,
+  }).from(L).where(leadWhere(c, f));
+  const stages = await db.select({ key: sql<string>`${L.followUpStep}::text`, n: sql<number>`count(*)::int` }).from(L)
+    .where(leadWhere(c, f, isNull(L.closedAt))).groupBy(sql`1`);
+  const statuses = await db.select({ key: sql<string>`${L.status}::text`, n: sql<number>`count(*)::int` }).from(L)
+    .where(leadWhere(c, f)).groupBy(sql`1`);
+  const reasons = await db.select({ reason: sql<string>`${L.closureReason}`, n: sql<number>`count(*)::int` }).from(L)
+    .where(leadWhere(c, f, and(lost, sql`${L.closureReason} is not null`))).groupBy(sql`1`).orderBy(sql`2 desc`).limit(6);
+  return { ...a, lostOther: Math.max(0, a.lost - a.lostNotInterested - a.lostNoResponse), stages, statuses, reasons };
 }
 
 export type DayRow = { day: string; newLeads: number; contacted: number; converted: number };

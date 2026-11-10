@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { requireCtx } from "@/lib/session";
 import { overviewMetrics } from "@/lib/leads";
+import { pipeline } from "@/lib/insights";
+import { Pipeline } from "@/components/Pipeline";
 import { sweepSoon } from "@/lib/sweep";
 import { SignOutButton } from "@/components/Nav";
 
@@ -9,7 +11,7 @@ export const dynamic = "force-dynamic";
 export default async function Overview() {
   const c = await requireCtx();
   sweepSoon(c.workspaceId);
-  const m = await overviewMetrics(c);
+  const [m, pipe] = await Promise.all([overviewMetrics(c), pipeline(c, { period: "7d" })]);
   const pct = m.newYesterday ? Math.round(((m.newToday - m.newYesterday) / m.newYesterday) * 100) : null;
   const empty = m.active === 0 && m.newToday === 0;
 
@@ -46,6 +48,9 @@ export default async function Overview() {
         <Tile href="/leads" label="Converted today" v={m.convertedToday} sub={`Active leads: ${m.active}`} />
         <Tile href="/leads?seg=closed" label="Closed or dropped" v={m.closedToday} sub="Today" />
       </section>
+
+      {!empty && <Pipeline p={pipe} compact />}
+      {!empty && <p className="sub"><Link href="/insights">See the full breakdown in Insights</Link></p>}
     </>
   );
 }

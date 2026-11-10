@@ -2,11 +2,12 @@ import "server-only";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { fromZonedTime } from "date-fns-tz";
 import { db, schema } from "@/db";
-import { dbTx } from "@/db/tx";
+import { dbTx, type Tx } from "@/db/tx";
 import { normalizePhone } from "@/lib/phone";
-import { parseWorksheet, type ColumnMap } from "@/lib/sheetparse";
+import { parseWorksheet, type ColumnMap, type ParsedRow } from "@/lib/sheetparse";
+import { parseSheetText } from "@/lib/sheetlabels";
 import { listTabsApi, serviceAccountConfigured } from "@/lib/sheetsapi";
-import { PermanentSyncError, SOURCE_FIELDS, fetchWorksheetCsv, type Base, type SourceField } from "@/lib/sheetsync";
+import { PermanentSyncError, SOURCE_FIELDS, applyProgress, fetchWorksheetCsv, type Base, type SourceField } from "@/lib/sheetsync";
 
 /** Operator actions on sheet data. Kept apart from the sync loop; each is tested against the database. */
 
@@ -51,11 +52,14 @@ export async function resolveFieldConflict(workspaceId: string, userId: string, 
     if (!row) throw new PermanentSyncError("That difference was already settled.");
     const c = row.c;
     const field = c.field as SourceField;
-    if (!SOURCE_FIELDS.includes(field) || !c.leadId) throw new PermanentSyncError("This kind of notice cannot be settled here.");
+    const isProgress = c.field === "progress"; // status and follow-up stage travel together
+    if ((!isProgress && !SOURCE_FIELDS.includes(field)) || !c.leadId) throw new PermanentSyncError("This kind of notice cannot be settled here.");
     const latest = await tx.select({ id: schema.syncConflict.id }).from(schema.syncConflict).where(and(
       eq(schema.syncConflict.leadId, c.leadId), eq(schema.syncConflict.field, c.field), isNull(schema.syncConflict.resolvedAt), sql`${schema.syncConflict.createdAt} > (select s2.created_at from sync_conflict s2 where s2.id = ${c.id})`)).limit(1);
     if (latest.length) throw new PermanentSyncError("The sheet changed again since this difference was recorded. Reload to see the newest one.");
-    {
+    if (isProgress) {
+      await settleProgress(tx, workspaceId, userId, c, choice);
+    } else {
       const [lead] = await tx.select().from(L).where(and(eq(L.id, c.leadId), eq(L.workspaceId, workspaceId))).for("update");
       if (!lead) throw new PermanentSyncError("The lead no longer exists.");
       const v = c.sheetValue || null;
@@ -81,6 +85,35 @@ export async function resolveFieldConflict(workspaceId: string, userId: string, 
     await tx.insert(schema.auditLog).values({ workspaceId, actorId: userId, action: "sheet.conflict", entity: "sync_conflict", entityId: c.id, data: { choice, field } });
     return { leadId: c.leadId, connectionId: c.connectionId };
   });
+}
+
+/** "sheet": the lead takes the sheet's status and follow-up stage. "crm": the sheet's current wording becomes the baseline, so the next push writes the CRM state into the sheet. */
+async function settleProgress(tx: Tx, workspaceId: string, userId: string, c: typeof schema.syncConflict.$inferSelect, choice: "crm" | "sheet") {
+  const [lead] = await tx.select().from(L).where(and(eq(L.id, c.leadId!), eq(L.workspaceId, workspaceId))).for("update");
+  if (!lead) throw new PermanentSyncError("The lead no longer exists.");
+  const seen = parseSheetText(c.sheetValue ?? "");
+  if (choice === "sheet") {
+    const [conn] = await tx.select().from(schema.spreadsheetConnection).where(eq(schema.spreadsheetConnection.id, c.connectionId));
+    const row = { sheetStatus: seen.status || null, ownerAlias: null, progress: { stage: seen.stage || null, notes: null, card: null, salesQualified: null, completedMeeting: null, onboarded: null, referralCode: null } } as unknown as ParsedRow;
+    await applyProgress(tx, conn, lead.id, row, () => ({ memberId: null, unmapped: false }), new Date(), { assigned: 0, progressed: 0 }, { forced: true });
+    await tx.insert(schema.leadActivity).values({
+      leadId: lead.id, workspaceId, type: "edited", actorId: userId, summary: `Took the sheet's status and follow-up stage after a difference: “${c.crmValue ?? ""}” → “${c.sheetValue ?? ""}”`,
+    });
+  } else {
+    const cust = (lead.custom ?? {}) as Record<string, unknown>;
+    await tx.update(L).set({ custom: { ...cust, sheetProgress: seen } }).where(eq(L.id, lead.id));
+  }
+}
+
+/** Turns "write status and follow-up stage back to the sheet" on or off for every tab of a two-way connection. */
+export async function setProgressWriteback(workspaceId: string, userId: string, connectionId: string, on: boolean) {
+  const [conn] = await db.select().from(schema.spreadsheetConnection)
+    .where(and(eq(schema.spreadsheetConnection.id, connectionId), eq(schema.spreadsheetConnection.workspaceId, workspaceId)));
+  if (!conn) throw new PermanentSyncError("Connection not found.");
+  if (on && conn.mode !== "two_way") throw new PermanentSyncError("Turn on two-way sync first.");
+  await db.update(schema.worksheetMapping).set({ valueMaps: sql`coalesce(${schema.worksheetMapping.valueMaps}, '{}'::jsonb) || jsonb_build_object('writeProgress', ${on}::boolean)` })
+    .where(eq(schema.worksheetMapping.connectionId, conn.id));
+  await db.insert(schema.auditLog).values({ workspaceId, actorId: userId, action: "sheet.progress_writeback", entity: "spreadsheet_connection", entityId: conn.id, data: { on } });
 }
 
 /** Switches a connection between read-only import and two-way sync. Turning two-way on needs the service account and Editor access. */
