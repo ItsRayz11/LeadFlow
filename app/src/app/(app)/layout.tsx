@@ -8,6 +8,7 @@ import { auth } from "@/lib/auth";
 import { db, schema } from "@/db";
 import { count } from "drizzle-orm";
 import { scope } from "@/lib/leads";
+import { AutoSync } from "@/components/AutoSync";
 import { syncIfStale } from "@/lib/syncstale";
 
 export const maxDuration = 60;
@@ -46,6 +47,7 @@ export default async function AppLayout({ children, modal }: { children: React.R
       <SideNav name={ctx.name} role={ctx.role} isManager={mgr} counts={counts} />
       <main className="main">{children}</main>
       {modal}
+      <AutoSync />
       <TabBar isManager={mgr} counts={counts} />
     </div>
   );

@@ -30,12 +30,13 @@ function notifyApp() {
   }
 }
 
-/** Creates the two triggers: any edit, and structural changes such as an inserted row. Safe to run again. */
+/** Creates the triggers: any edit, structural changes such as an inserted row, and a 10-minute timer. Safe to run again. */
 function install() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ScriptApp.getProjectTriggers().filter((t) => t.getHandlerFunction() === "notifyApp").forEach((t) => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger("notifyApp").forSpreadsheet(ss).onEdit().create();
   ScriptApp.newTrigger("notifyApp").forSpreadsheet(ss).onChange().create();
+  ScriptApp.newTrigger("notifyApp").timeBased().everyMinutes(10).create(); // timer: sync both ways every 10 minutes even if nobody edits or has the app open
 }
 
 function testPing() {
