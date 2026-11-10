@@ -5,7 +5,7 @@ import { Submit } from "@/components/ActionForm";
 import type { TabSaveResult } from "@/lib/tabsave";
 import type { TabState } from "@/lib/tabs";
 
-export type PickerTab = { gid: string; title: string; state: TabState; hint?: string };
+export type PickerTab = { gid: string; title: string; state: TabState; hint?: string; locked?: boolean };
 
 const BADGE: Record<TabState, NonNullable<MSOption["badge"]>> = {
   syncing: { text: "Syncing", tone: "ok" },
@@ -42,7 +42,7 @@ export function TabSyncPicker({
   }
 
   const options: MSOption[] = tabs.map((t) => ({
-    value: t.gid, label: t.title, badge: BADGE[t.state],
+    value: t.gid, label: t.title, badge: BADGE[t.state], disabled: t.locked,
     warning: warn[t.gid] ? `Cannot sync: ${warn[t.gid]}` : t.hint,
   }));
 

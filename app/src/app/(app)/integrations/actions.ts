@@ -98,7 +98,10 @@ export async function saveTabsAction(_p: TabSaveResult, fd: FormData): Promise<T
       .where(and(eq(schema.spreadsheetConnection.id, p.data.connectionId), eq(schema.spreadsheetConnection.workspaceId, c.workspaceId)));
     if (!conn) return { error: "Connection not found." };
     const live = await fetchTabList(conn.s); // throws before anything is changed
-    return await applyTabSelection(c, { id: conn.id, spreadsheetId: conn.s }, live, ticked);
+    const res = await applyTabSelection(c, { id: conn.id, spreadsheetId: conn.s }, live, ticked);
+    // Refresh the page's tab statuses and the confirm panels after anything was saved.
+    if (res?.ok) { revalidatePath("/integrations"); revalidatePath("/", "layout"); }
+    return res;
   } catch (e) {
     const r = fail(e);
     return r ? { ...r } : r;

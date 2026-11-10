@@ -246,7 +246,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
         {picker && "tabs" in picker && (
           <TabSyncPicker
             action={connectPickedAction} hidden={{ spreadsheetId: picker.spreadsheetId }} saveLabel="Track the selected tabs"
-            tabs={picker.tabs.map((t) => ({ gid: t.gid, title: visibleTabTitle(t.title), state: picker.have.has(t.gid) ? "syncing" as const : "off" as const, hint: t.gid === picker.linked && !picker.have.has(t.gid) ? "The tab from your link" : undefined }))}
+            tabs={picker.tabs.map((t) => ({ gid: t.gid, title: visibleTabTitle(t.title), state: picker.have.has(t.gid) ? "syncing" as const : "off" as const, locked: picker.have.has(t.gid), hint: picker.have.has(t.gid) ? "Already tracked. Change it under “Tabs being synced” above." : t.gid === picker.linked ? "The tab from your link" : undefined }))}
             initial={[...picker.have, ...(picker.linked && !picker.have.has(picker.linked) ? [picker.linked] : [])]}
             note="Each tab is checked for the expected columns first. A tab that does not look like a lead list is reported by name and left out; the others are still connected."
           />
