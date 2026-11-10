@@ -7,7 +7,7 @@
  *   3. Pick the function "install" in the toolbar and press Run. Approve the permissions when asked.
  *   4. To check it, press Run on "testPing". The Executions page shows the app's reply.
  *
- * Safety net: even if a notification is missed, the app re-reads the sheet every few minutes.
+ * Safety net: if a notification is missed, the app re-reads the sheet whenever anyone opens it (at most every 5 minutes) and on the scheduled run.
  */
 const APP_URL = "https://YOUR-APP-DOMAIN"; // no trailing slash
 const WEBHOOK_SECRET = "PASTE-SHEET_WEBHOOK_SECRET-HERE";
