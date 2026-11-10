@@ -1,7 +1,9 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 import { requireCtx } from "@/lib/session";
+import { pushLeadNow } from "@/lib/sheetwrite";
 import {
   EngineError, addNote, assignLead, bulkAssign, bulkReschedule, closeLead, recordOutcome, reopenLead,
   scheduleNext, setMilestone, updateLead,
@@ -87,6 +89,7 @@ export async function updateLeadAction(_p: R, fd: FormData): Promise<R> {
   try {
     const ctx = await requireCtx();
     const r = await updateLead(ctx, p.data);
+    if (!("unchanged" in r && r.unchanged) && !r.duplicate) after(() => pushLeadNow(p.data.leadId)); // two-way sheets get the edit in seconds
     return done("unchanged" in r && r.unchanged ? "Nothing to change." : "Saved.");
   } catch (e) { return fail(e); }
 }

@@ -17,7 +17,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 Notes
 - Priority order: Follow-up reliability → Data integrity → Mobile usability → Team accountability → Sheets sync → Premium design → AI.
 - Default timezone: Asia/Karachi. Store UTC.
-- Sheets mode default: read-only import. Never write to the sheet without explicit approval.
+- Sheets mode default: read-only import. Two-way write-back exists (service account, Editor access) but stays off per connection until a manager turns it on in Integrations; approved by the owner 2026-11-10. Setup: GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_PRIVATE_KEY, SHEET_WEBHOOK_SECRET; Apps Script in docs/apps-script/.
 - Serverless caveat: sync and reminder jobs must be idempotent and short; use cron + DB-backed job table (no in-memory schedulers).
 
 ## Open blockers / decisions needed

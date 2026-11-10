@@ -6,6 +6,7 @@ import { db, schema } from "@/db";
 import { dbTx } from "@/db/tx";
 import { notify } from "@/lib/notify";
 import { dueFor, readSettings } from "@/lib/schedule";
+import { SheetsAccessError, SheetsTransientError, listTabsApi, readTableApi, serviceAccountConfigured } from "@/lib/sheetsapi";
 import { DEFAULT_COLUMN_MAP, parseCsv, parseTabList, parseWorksheet, type ColumnMap, type ParsedRow } from "@/lib/sheetparse";
 
 const L = schema.lead;
@@ -31,6 +32,29 @@ export class BudgetError extends Error {}
  * (the OAuth reader replaces this function once Google credentials exist).
  */
 export async function fetchWorksheetCsv(spreadsheetId: string, gid: string, deadline?: number): Promise<string[][]> {
+  // Preferred: the Sheets API as the service account, which also works for private sheets.
+  // Not shared with it? Fall back to the public CSV link so existing link-shared connections keep working.
+  if (serviceAccountConfigured()) {
+    try { return await readTableApi(spreadsheetId, gid, deadline); }
+    catch (e) {
+      if (e instanceof SheetsAccessError) {
+        try { return await fetchCsv(spreadsheetId, gid, deadline); }
+        catch (e2) { throw e2 instanceof PermanentSyncError ? new PermanentSyncError(e.message) : e2; } // the API message says how to fix access
+      }
+      throw apiFailure(e, deadline);
+    }
+  }
+  return fetchCsv(spreadsheetId, gid, deadline);
+}
+
+/** Turns a temporary Sheets API failure into the errors the sync loop understands. */
+export function apiFailure(e: unknown, deadline?: number): unknown {
+  if (e instanceof SheetsTransientError) return deadline && Date.now() > deadline - 2_000 ? new BudgetError(e.message) : new Error(e.message);
+  if (e instanceof SheetsAccessError) return new PermanentSyncError(e.message);
+  return e;
+}
+
+async function fetchCsv(spreadsheetId: string, gid: string, deadline?: number): Promise<string[][]> {
   const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/export?format=csv&gid=${encodeURIComponent(gid)}`;
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -56,6 +80,10 @@ export async function fetchWorksheetCsv(spreadsheetId: string, gid: string, dead
 
 /** Lists the tabs of a link-shared spreadsheet (needs no credentials). Throws a clear error when the sheet is private or the list cannot be found. */
 export async function fetchTabList(spreadsheetId: string): Promise<{ gid: string; title: string }[]> {
+  if (serviceAccountConfigured()) {
+    try { const tabs = await listTabsApi(spreadsheetId, undefined, true); if (tabs.length) return tabs; }
+    catch (e) { if (!(e instanceof SheetsAccessError)) throw apiFailure(e); } // not shared with the service account: try the public page
+  }
   const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/htmlview`;
   let res: Response;
   try { res = await fetch(url, { signal: AbortSignal.timeout(15_000), redirect: "follow", cache: "no-store", headers: { "user-agent": "Mozilla/5.0" } }); }

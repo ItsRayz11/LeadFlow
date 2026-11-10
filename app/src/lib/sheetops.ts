@@ -5,6 +5,7 @@ import { db, schema } from "@/db";
 import { dbTx } from "@/db/tx";
 import { normalizePhone } from "@/lib/phone";
 import { parseWorksheet, type ColumnMap } from "@/lib/sheetparse";
+import { listTabsApi, serviceAccountConfigured } from "@/lib/sheetsapi";
 import { PermanentSyncError, SOURCE_FIELDS, fetchWorksheetCsv, type Base, type SourceField } from "@/lib/sheetsync";
 
 /** Operator actions on sheet data. Kept apart from the sync loop; each is tested against the database. */
@@ -67,7 +68,23 @@ export async function resolveFieldConflict(workspaceId: string, userId: string, 
     await tx.update(schema.syncConflict).set({ resolvedAt: new Date(), resolution: choice === "sheet" ? "used sheet value" : "kept CRM value" })
       .where(eq(schema.syncConflict.id, c.id));
     await tx.insert(schema.auditLog).values({ workspaceId, actorId: userId, action: "sheet.conflict", entity: "sync_conflict", entityId: c.id, data: { choice, field } });
+    return { leadId: c.leadId, connectionId: c.connectionId };
   });
+}
+
+/** Switches a connection between read-only import and two-way sync. Turning two-way on needs the service account and Editor access. */
+export async function setSyncMode(workspaceId: string, userId: string, connectionId: string, mode: "read_only" | "two_way") {
+  const [conn] = await db.select().from(schema.spreadsheetConnection)
+    .where(and(eq(schema.spreadsheetConnection.id, connectionId), eq(schema.spreadsheetConnection.workspaceId, workspaceId)));
+  if (!conn) throw new PermanentSyncError("Connection not found.");
+  if (mode === "two_way") {
+    if (!serviceAccountConfigured()) throw new PermanentSyncError("Two-way sync needs the Google service account. Add GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY to the server settings first.");
+    try { await listTabsApi(conn.spreadsheetId, undefined, true); }
+    catch (e) { throw new PermanentSyncError(e instanceof Error ? e.message : "Google Sheets could not be reached."); }
+    // This proves the sheet is readable by the service account. Editor access is only proven by the first write; a failure shows on the connection.
+  }
+  await db.update(schema.spreadsheetConnection).set({ mode }).where(eq(schema.spreadsheetConnection.id, conn.id));
+  await db.insert(schema.auditLog).values({ workspaceId, actorId: userId, action: "sheet.mode", entity: "spreadsheet_connection", entityId: conn.id, data: { mode } });
 }
 
 /** Validates and saves a column mapping. Changing the id column after import would re-create every lead, so it is blocked. */

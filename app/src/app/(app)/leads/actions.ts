@@ -1,5 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
+import { appendLeadToSheet } from "@/lib/sheetwrite";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/db";
@@ -77,6 +79,7 @@ export async function createLead(_prev: FormState, fd: FormData): Promise<FormSt
       dueAt: new Date(now.getTime() + 3600e3), dedupeKey: `${lead.id}:contact_started:0`,
     }).onConflictDoNothing();
   }
+  after(() => appendLeadToSheet(lead.id)); // two-way sheets get the new lead as a row; a failure is retried by the periodic run
   redirect(`/leads/${lead.id}`);
 }
 

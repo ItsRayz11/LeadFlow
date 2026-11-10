@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { db, schema } from "@/db";
 import { canManage, requireCtx } from "@/lib/session";
 import { ActionForm, Submit } from "@/components/ActionForm";
-import { aliasAction, conflictAction, confirmAllAction, connectSheetAction, addTabsAction, stopTabAction, syncNowAction } from "./actions";
+import { serviceAccountConfigured, serviceAccountEmail } from "@/lib/sheetsapi";
+import { aliasAction, conflictAction, confirmAllAction, connectSheetAction, addTabsAction, sheetModeAction, stopTabAction, syncNowAction } from "./actions";
 import { MappingPanel } from "./MappingPanel";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +28,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
     .leftJoin(schema.lead, eq(schema.lead.id, schema.syncConflict.leadId))
     .where(and(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId), isNull(schema.syncConflict.resolvedAt), ne(schema.syncConflict.field, "unmapped_owner")))
     .orderBy(desc(schema.syncConflict.createdAt)).limit(50);
+  const saEmail = serviceAccountConfigured() ? serviceAccountEmail() : null;
   const assignable = members.filter((m) => m.role !== "viewer");
   const aliases = [...new Set(conflicts.map((x) => x.v ?? "").filter(Boolean))];
 
@@ -38,15 +40,17 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
 
   return (
     <>
-      <header className="top"><div><h1>Integrations</h1><p>Google Sheets feeds new leads in. The sheet is never written to, and leads are never deleted when a row disappears.</p></div></header>
+      <header className="top"><div><h1>Integrations</h1><p>Google Sheets feeds new leads in. In two-way mode, edits made in the CRM are written back to the sheet. Leads are never deleted when a row disappears.</p></div></header>
 
       {cards.map(({ cn, maps, jobs }) => (
         <section key={cn.id} className="panel glass">
           <h2>{cn.title ?? "Google Sheet"} {cn.healthy ? <span className="pill ok">Healthy</span> : <span className="pill crit">Needs attention</span>}</h2>
           <dl className="kv" style={{ gridTemplateColumns: "190px 1fr" }}>
-            <dt>Mode</dt><dd>Read-only import</dd>
+            <dt>Mode</dt><dd>{cn.mode === "two_way" ? "Two-way: the sheet and the CRM stay in step" : "Read-only import"}</dd>
             <dt>Last successful sync</dt><dd>{fmt(cn.lastSuccessfulSyncAt, c.tz)}</dd>
-            <dt>Access</dt><dd>Link sharing, view only. Google sign-in replaces this once credentials are added.</dd>
+            <dt>Access</dt><dd>{saEmail
+              ? <>Google service account <strong>{saEmail}</strong>. Share the sheet with it as <strong>Editor</strong> for two-way sync; Viewer is enough to import.</>
+              : "Link sharing, view only. Add the Google service account to the server settings to enable two-way sync."}</dd>
             {cn.lastError && <><dt>Last error</dt><dd className="err">{cn.lastError}</dd></>}
           </dl>
           {maps.length > 1 && maps.some((m) => !m.confirmedAt) && (
@@ -63,6 +67,18 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             </div>
           ))}
           <ActionForm action={addTabsAction}><input type="hidden" name="connectionId" value={cn.id} /><Submit className="btn ghost" pendingText="Looking for tabs">Add more tabs</Submit><p className="sub">Finds tabs in this spreadsheet that are not connected yet. Connected tabs are left as they are.</p></ActionForm>
+          {saEmail && (
+            <ActionForm action={sheetModeAction}>
+              <input type="hidden" name="connectionId" value={cn.id} />
+              <input type="hidden" name="mode" value={cn.mode === "two_way" ? "read_only" : "two_way"} />
+              <Submit className={cn.mode === "two_way" ? "btn ghost" : "btn"} pendingText="Checking access">{cn.mode === "two_way" ? "Switch back to read-only" : "Turn on two-way sync"}</Submit>
+              <p className="sub">
+                {cn.mode === "two_way"
+                  ? "CRM edits to name, phone, email, campaign and source are written to the matching row. If both sides changed the same field, nothing is overwritten: it appears under “Differences” for you to settle."
+                  : "Writes CRM edits and new leads to the sheet, matched by the lead id column (never by row number). Nothing is written until you turn this on. Edits already made in the CRM that the sheet does not have yet are written the first time it runs (up to 200 leads per run)."}
+              </p>
+            </ActionForm>
+          )}
           {maps.some((m) => m.confirmedAt) && (
             <ActionForm action={syncNowAction}><input type="hidden" name="connectionId" value={cn.id} /><Submit pendingText="Syncing">Sync now</Submit></ActionForm>
           )}
@@ -83,7 +99,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       {diffs.length > 0 && (
         <section className="panel glass">
           <h2>Differences between the sheet and the CRM <span className="pill warn">{diffs.length}</span></h2>
-          <p className="sub">Someone changed these in the CRM, and the sheet now says something else. The CRM value stays until you choose.</p>
+          <p className="sub">Someone changed these in the CRM, and the sheet now says something else. Nothing is overwritten on either side until you choose. “Keep CRM value” also writes it to the sheet when two-way sync is on.</p>
           {diffs.map(({ c: d, lead }) => (
             <div key={d.id} className="set-row" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
               <div><strong>{lead ?? "Lead"}</strong> · {d.field}<small>CRM: “{d.crmValue ?? ""}” · Sheet: “{d.sheetValue ?? ""}”</small></div>

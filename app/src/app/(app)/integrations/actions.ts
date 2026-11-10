@@ -7,7 +7,9 @@ import { requireCtx } from "@/lib/session";
 import { fromZonedTime } from "date-fns-tz";
 import { DEFAULT_COLUMN_MAP, parseSheetUrl, parseWorksheet } from "@/lib/sheetparse";
 import { BudgetError, PermanentSyncError, fetchTabList, fetchWorksheetCsv, syncConnection } from "@/lib/sheetsync";
-import { linkAlias, resolveFieldConflict, saveMapping } from "@/lib/sheetops";
+import { linkAlias, resolveFieldConflict, saveMapping, setSyncMode } from "@/lib/sheetops";
+import { pushConnection } from "@/lib/sheetwrite";
+import { after } from "next/server";
 import type { R } from "../actions";
 
 
@@ -185,8 +187,22 @@ export async function conflictAction(_p: R, fd: FormData): Promise<R> {
   if (!p.success) return { error: "Invalid request." };
   try {
     const c = await manager();
-    await resolveFieldConflict(c.workspaceId, c.userId, p.data.conflictId, p.data.choice);
+    const r = await resolveFieldConflict(c.workspaceId, c.userId, p.data.conflictId, p.data.choice);
+    // Keeping the CRM value means the sheet must now take it: push in the background instead of waiting for the next run.
+    if (p.data.choice === "crm" && r.leadId) after(() => pushConnection(r.connectionId, { leadId: r.leadId!, deadline: Date.now() + 20_000 }).then(() => undefined, console.error));
     return ok(p.data.choice === "sheet" ? "Took the sheet's value." : "Kept the CRM value.");
+  } catch (e) { return fail(e); }
+}
+
+export async function sheetModeAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ connectionId: z.string().uuid(), mode: z.enum(["read_only", "two_way"]) }).safeParse(Object.fromEntries(fd));
+  if (!p.success) return { error: "Invalid request." };
+  try {
+    const c = await manager();
+    await setSyncMode(c.workspaceId, c.userId, p.data.connectionId, p.data.mode);
+    return ok(p.data.mode === "two_way"
+      ? "Two-way sync is on. Edits in the CRM are written to the sheet, and the sheet's edits keep coming in."
+      : "Back to read-only. The sheet is no longer written to.");
   } catch (e) { return fail(e); }
 }
 
