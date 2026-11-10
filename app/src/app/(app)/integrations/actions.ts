@@ -168,7 +168,7 @@ export async function syncNowAction(_p: R, fd: FormData): Promise<R> {
     const s = await syncConnection(conn.id, "manual", c.userId, Date.now() + 50_000);
     if (!s.ran) return { error: "A sync is already running for this sheet, or no worksheet is confirmed yet." };
     if (s.partial) return ok(`Synced ${s.created} new so far. It did not finish in the time allowed and will continue on the next run.`);
-    return ok(`Sync finished: ${s.created} new, ${s.updated} updated, ${s.skipped} skipped.`);
+    return ok(`Sync finished: ${s.created} new, ${s.updated} updated, ${s.progressed} progress updates from the sheet, ${s.assigned} assigned, ${s.skipped} skipped.`);
   } catch (e) { return fail(e); }
 }
 
@@ -177,8 +177,8 @@ export async function aliasAction(_p: R, fd: FormData): Promise<R> {
   if (!p.success) return { error: "Pick a team member." };
   try {
     const c = await manager();
-    await linkAlias(c.workspaceId, c.userId, p.data.alias, p.data.memberId);
-    return ok("Saved. Future syncs assign this name to that person. Leads already imported can be assigned from the Leads page.");
+    const r = await linkAlias(c.workspaceId, c.userId, p.data.alias, p.data.memberId);
+    return ok(r.assigned ? `Saved. ${r.assigned} lead${r.assigned === 1 ? "" : "s"} already imported with this name ${r.assigned === 1 ? "is" : "are"} now assigned, and future syncs assign it automatically.` : "Saved. Future syncs assign this name to that person.");
   } catch (e) { return fail(e); }
 }
 

@@ -27,7 +27,18 @@ export async function linkAlias(workspaceId: string, userId: string, aliasRaw: s
   await db.update(schema.syncConflict).set({ resolvedAt: new Date(), resolution: `mapped to member ${m.id}` })
     .where(and(inArray(schema.syncConflict.connectionId, mine), eq(schema.syncConflict.field, "unmapped_owner"),
       sql`lower(${schema.syncConflict.sheetValue}) = lower(${alias})`, isNull(schema.syncConflict.resolvedAt)));
-  await db.insert(schema.auditLog).values({ workspaceId, actorId: userId, action: "sheet.alias", entity: "identity_alias", data: { alias, memberId: m.id } });
+  // Leads imported earlier with this name were left unassigned. Give them to the person now, but never take a lead from someone who already has it.
+  const assigned = await db.update(L).set({ ownerId: m.id, updatedAt: new Date(), updatedBy: userId, version: sql`${L.version} + 1` })
+    .where(and(eq(L.workspaceId, workspaceId), isNull(L.ownerId), isNull(L.mergedIntoId), sql`lower(${L.custom}->>'ownerNameInSheet') = lower(${alias})`))
+    .returning({ id: L.id });
+  for (let i = 0; i < assigned.length; i += 200) {
+    await db.insert(schema.leadActivity).values(assigned.slice(i, i + 200).map((a) => ({
+      leadId: a.id, workspaceId, type: "assigned" as const, actorId: null,
+      summary: `Assigned because “${alias}” in the sheet was linked to this person`, idempotencyKey: `assign:alias:${a.id}`,
+    }))).onConflictDoNothing();
+  }
+  await db.insert(schema.auditLog).values({ workspaceId, actorId: userId, action: "sheet.alias", entity: "identity_alias", data: { alias, memberId: m.id, assigned: assigned.length } });
+  return { assigned: assigned.length };
 }
 
 /** Settles a CRM-vs-sheet difference. "crm" keeps what the team typed; "sheet" takes the sheet's value. Both are logged. */

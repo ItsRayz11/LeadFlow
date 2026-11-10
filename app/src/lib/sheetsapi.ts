@@ -104,10 +104,23 @@ export async function tabTitle(spreadsheetId: string, gid: string, deadline?: nu
 /** The whole tab as rows of text, the same shape the CSV reader returns. Dates and numbers come back as displayed in the sheet. */
 export async function readTableApi(spreadsheetId: string, gid: string, deadline?: number): Promise<string[][]> {
   const title = await tabTitle(spreadsheetId, gid, deadline);
-  const j = await call<{ values?: unknown[][] }>(
-    `/${enc(spreadsheetId)}/values/${enc(quote(title))}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`, { deadline });
-  return (j.values ?? []).map((r) => r.map((c) => (c === null || c === undefined ? "" : String(c))));
+  const range = `/${enc(spreadsheetId)}/values/${enc(quote(title))}?majorDimension=ROWS&valueRenderOption=`;
+  const j = await call<{ values?: unknown[][] }>(`${range}FORMATTED_VALUE`, { deadline });
+  let rows = (j.values ?? []).map((r) => r.map((c) => (c === null || c === undefined ? "" : String(c))));
+  // A long number in a numeric cell is displayed as 2.56708E+15, which loses digits. The sheet still holds the exact value,
+  // so for those cells only, read the underlying number (when it is a whole number JavaScript can hold exactly).
+  if (rows.some((r) => r.some((c) => SCI.test(c)))) {
+    const raw = await call<{ values?: unknown[][] }>(`${range}UNFORMATTED_VALUE`, { deadline });
+    rows = rows.map((r, i) => r.map((c, k) => {
+      if (!SCI.test(c)) return c;
+      const u = raw.values?.[i]?.[k];
+      return typeof u === "number" && Number.isSafeInteger(u) ? String(u) : c;
+    }));
+  }
+  return rows;
 }
+
+const SCI = /^\d+(\.\d+)?e\+?\d+$/i;
 
 /** 1 -> A, 27 -> AA */
 export function colLetter(n: number): string {

@@ -91,3 +91,12 @@ describe("worksheet parsing", () => {
     expect(bad.missingColumns.length).toBeGreaterThan(0);
   });
 });
+
+describe("rows that only hold empty checkboxes", () => {
+  it("are filler, not leads with a missing id", () => {
+    const t = [["id", "full_name", "sales qualified", "onboarded"], ["", "", "FALSE", "FALSE"], ["A1", "Ana", "FALSE", "FALSE"], ["", "No Id Person", "FALSE", ""]];
+    const r = parseWorksheet(t, { ...DEFAULT_COLUMN_MAP, contact: [] }, TZ, fromZonedTime);
+    expect(r.rows.map((x) => x.externalId)).toEqual(["A1"]);
+    expect(r.skipped).toEqual([{ reason: "no lead id", count: 1 }]); // a real row without an id is still reported
+  });
+});

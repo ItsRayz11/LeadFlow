@@ -3,9 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { fromZonedTime } from "date-fns-tz";
 import { db, schema } from "@/db";
-import { dbTx } from "@/db/tx";
+import { dbTx, type Tx } from "@/db/tx";
 import { notify } from "@/lib/notify";
 import { dueFor, readSettings } from "@/lib/schedule";
+import { mayApplyProgress, planProgress, type ProgressBase } from "@/lib/sheetprogress";
 import { SheetsAccessError, SheetsTransientError, listTabsApi, readTableApi, serviceAccountConfigured } from "@/lib/sheetsapi";
 import { DEFAULT_COLUMN_MAP, parseCsv, parseTabList, parseWorksheet, type ColumnMap, type ParsedRow } from "@/lib/sheetparse";
 
@@ -19,7 +20,7 @@ export type SourceField = (typeof SOURCE_FIELDS)[number];
 export type Base = Record<SourceField, string | null>;
 
 const hashRow = (r: ParsedRow) =>
-  createHash("sha256").update(JSON.stringify([r.name, r.phoneRaw, r.email, r.campaign, r.source, r.sheetStatus, r.ownerAlias])).digest("hex").slice(0, 32);
+  createHash("sha256").update(JSON.stringify([r.name, r.phoneRaw, r.email, r.campaign, r.source, r.sheetStatus, r.ownerAlias, r.progress])).digest("hex").slice(0, 32);
 const baseOf = (r: ParsedRow): Base => ({ name: r.name, phoneRaw: r.phoneRaw, email: r.email, campaign: r.campaign, source: r.source });
 
 export class PermanentSyncError extends Error {}
@@ -95,10 +96,10 @@ export async function fetchTabList(spreadsheetId: string): Promise<{ gid: string
 }
 
 export type SyncSummary = {
-  seen: number; created: number; updated: number; skipped: number; assigned: number; possibleDuplicates: number; conflicts: number;
+  seen: number; created: number; updated: number; skipped: number; assigned: number; possibleDuplicates: number; conflicts: number; progressed: number;
   skippedReasons: string[]; ran: boolean; partial?: boolean;
 };
-const emptySummary = (): SyncSummary => ({ seen: 0, created: 0, updated: 0, skipped: 0, assigned: 0, possibleDuplicates: 0, conflicts: 0, skippedReasons: [], ran: true });
+const emptySummary = (): SyncSummary => ({ seen: 0, created: 0, updated: 0, skipped: 0, assigned: 0, possibleDuplicates: 0, conflicts: 0, progressed: 0, skippedReasons: [], ran: true });
 
 /** Matches sheet names to people: explicit admin aliases first, then an exact (case-insensitive) display name. */
 async function ownerResolver(workspaceId: string) {
@@ -194,6 +195,95 @@ export async function syncConnection(
   }
 }
 
+const OPEN_STEPS = new Set(["contact_started", "h24", "h48", "final"]);
+const STEP_LABEL: Record<string, string> = { contact_started: "Contact started", h24: "24H follow-up", h48: "48H follow-up", final: "Final follow-up", completed: "Completed" };
+
+/**
+ * Brings what the team already recorded in the sheet into the CRM: owner (for leads still unassigned), status, follow-up stage,
+ * card milestones and notes. Rules: a CRM edit always wins (see mayApplyProgress); milestones only ever get added; notes are added
+ * to the timeline, never overwritten; no notification is sent, so a backfill cannot flood anyone.
+ */
+async function applyProgress(tx: Tx, conn: typeof schema.spreadsheetConnection.$inferSelect, leadId: string, r: ParsedRow, resolve: Resolver, now: Date, out: { assigned: number; progressed: number }) {
+  const [lead] = await tx.select().from(L).where(eq(L.id, leadId)).for("update");
+  if (!lead) return;
+  const set: Partial<typeof L.$inferInsert> = {};
+  const said: string[] = [];
+  const cust = (lead.custom ?? {}) as Record<string, unknown> & { progressBase?: ProgressBase };
+
+  let ownerId = lead.ownerId;
+  if (!ownerId) {
+    const { memberId } = resolve(r.ownerAlias);
+    if (memberId) {
+      ownerId = memberId; set.ownerId = memberId; out.assigned++;
+      await tx.insert(schema.leadActivity).values({
+        leadId: lead.id, workspaceId: conn.workspaceId, type: "assigned", actorId: null,
+        summary: `Assigned from the sheet owner column (“${r.ownerAlias}”)`, idempotencyKey: `assign:sheet:${lead.id}`,
+      }).onConflictDoNothing();
+    }
+  }
+
+  const plan = planProgress({ status: r.sheetStatus, stage: r.progress.stage, card: r.progress.card, salesQualified: r.progress.salesQualified, completedMeeting: r.progress.completedMeeting, onboarded: r.progress.onboarded });
+  const base = cust.progressBase;
+  const sheetHasState = !!(plan.status || plan.step || plan.closeAs);
+  const canApply = sheetHasState && mayApplyProgress(lead, base);
+  let stepSet: string | null = null;
+  if (canApply) {
+    if (plan.closeAs) {
+      if (!lead.closedAt || lead.outcome !== plan.closeAs) {
+        Object.assign(set, { outcome: plan.closeAs, status: plan.closeAs, closedAt: lead.closedAt ?? now, closureReason: "Marked in the sheet", followUpStep: "completed" as const, nextFollowUpAt: null, convertedAt: plan.closeAs === "converted" ? now : null });
+        await tx.update(schema.followUpTask).set({ status: "cancelled", updatedAt: now, notes: `Closed from the sheet: ${plan.closeAs}` })
+          .where(and(eq(schema.followUpTask.leadId, lead.id), eq(schema.followUpTask.status, "pending")));
+        said.push(`closed as ${plan.closeAs.replace("_", " ")}`);
+      }
+    } else {
+      if (lead.closedAt) { Object.assign(set, { closedAt: null, outcome: null, closureReason: null, convertedAt: null }); said.push("reopened"); }
+      if (plan.status && plan.status !== lead.status) { set.status = plan.status; said.push(`status ${plan.status.replace("_", " ")}`); }
+      if (plan.step && plan.step !== lead.followUpStep) { set.followUpStep = plan.step; stepSet = plan.step; said.push(STEP_LABEL[plan.step]); }
+    }
+  }
+  for (const m of plan.milestones) if (!lead[m]) { set[m] = now; said.push(m.replace(/At$/, "").replace(/([A-Z])/g, " $1").toLowerCase()); }
+
+  // A follow-up stage with an owner needs an open task, or it never shows in the follow-up lists. Due later today, not overdue.
+  const finalStep = (set.followUpStep as string | undefined) ?? lead.followUpStep;
+  const closedNow = set.closedAt !== undefined ? set.closedAt !== null : !!lead.closedAt;
+  if (stepSet && ownerId && !closedNow && OPEN_STEPS.has(finalStep)) {
+    const [open] = await tx.select({ id: schema.followUpTask.id }).from(schema.followUpTask)
+      .where(and(eq(schema.followUpTask.leadId, lead.id), eq(schema.followUpTask.status, "pending"))).limit(1);
+    if (!open) {
+      const due = new Date(now.getTime() + 2 * 3600e3);
+      const [t] = await tx.insert(schema.followUpTask).values({
+        workspaceId: conn.workspaceId, leadId: lead.id, step: finalStep as "contact_started" | "h24" | "h48" | "final", dueAt: due, ownerId,
+        priority: "normal", createdBy: "sheet-sync", dedupeKey: `${lead.id}:${finalStep}:sheet`,
+      }).onConflictDoNothing().returning({ id: schema.followUpTask.id });
+      if (t) set.nextFollowUpAt = due;
+    }
+  }
+
+  const sourceState = { status: (set.status as string | undefined) ?? lead.status, step: (set.followUpStep as string | undefined) ?? lead.followUpStep, closed: closedNow };
+  const applied = said.length > 0;
+  const flags = { salesQualified: plan.flags.salesQualified, completedMeeting: plan.flags.completedMeeting, onboarded: plan.flags.onboarded, referralCode: r.progress.referralCode, cardStatus: r.progress.card };
+  // The baseline records what the sheet last gave the CRM. It moves only when the CRM still matched it, so a CRM edit is never overwritten.
+  const newCustom = { ...cust, sheetFlags: flags, ...(canApply ? { progressBase: sourceState } : {}) };
+  const changed = Object.keys(set).length > 0;
+  if (changed || JSON.stringify(newCustom) !== JSON.stringify(cust)) {
+    await tx.update(L).set({ ...set, custom: newCustom, updatedAt: changed ? now : lead.updatedAt, updatedBy: changed ? "sheet-sync" : lead.updatedBy, version: changed ? lead.version + 1 : lead.version }).where(eq(L.id, lead.id));
+  }
+  if (applied) {
+    out.progressed++;
+    await tx.insert(schema.leadActivity).values({
+      leadId: lead.id, workspaceId: conn.workspaceId, type: "synced", actorId: null, summary: `Progress from the sheet: ${said.join(", ")}`,
+      idempotencyKey: `progress:${lead.id}:${hashRow(r)}`,
+    }).onConflictDoNothing();
+  }
+  const note = r.progress.notes?.trim();
+  if (note) {
+    await tx.insert(schema.leadActivity).values({
+      leadId: lead.id, workspaceId: conn.workspaceId, type: "note", actorId: null, summary: `Note from the sheet: ${note}`,
+      idempotencyKey: `sheetnote:${createHash("sha1").update(note).digest("hex").slice(0, 16)}`,
+    }).onConflictDoNothing();
+  }
+}
+
 async function ingest(
   conn: typeof schema.spreadsheetConnection.$inferSelect, ws: typeof schema.workspace.$inferSelect,
   settings: ReturnType<typeof readSettings>, gid: string, rows: ParsedRow[], resolve: Resolver, out: SyncSummary, deadline?: number,
@@ -236,7 +326,7 @@ async function ingest(
     });
 
     await dbTx.transaction(async (tx) => {
-      const chunkOut = { created: 0, updated: 0, assigned: 0, possibleDuplicates: 0, conflicts: 0 };
+      const chunkOut = { created: 0, updated: 0, assigned: 0, possibleDuplicates: 0, conflicts: 0, progressed: 0 };
       if (plan.length) {
         const inserted = await tx.insert(L).values(plan.map((p) => ({
           id: p.id, workspaceId: conn.workspaceId, name: p.r.name, phoneRaw: p.r.phoneRaw, phoneNorm: p.r.phoneNorm,
@@ -285,6 +375,7 @@ async function ingest(
               eq(schema.syncConflict.sheetValue, p.r.ownerAlias), isNull(schema.syncConflict.resolvedAt))).limit(1);
             if (!open) await tx.insert(schema.syncConflict).values({ connectionId: conn.id, leadId: p.id, field: "unmapped_owner", sheetValue: p.r.ownerAlias, crmValue: null });
           }
+          await applyProgress(tx, conn, p.id, p.r, resolve, now, chunkOut);
         }
       }
 
@@ -333,10 +424,11 @@ async function ingest(
           }).onConflictDoNothing();
           chunkOut.updated++;
         }
+        await applyProgress(tx, conn, e.id, r, resolve, now, chunkOut);
       }
       // Counted only after the chunk commits (the callback returning without throwing).
       out.created += chunkOut.created; out.updated += chunkOut.updated; out.assigned += chunkOut.assigned;
-      out.possibleDuplicates += chunkOut.possibleDuplicates; out.conflicts += chunkOut.conflicts;
+      out.possibleDuplicates += chunkOut.possibleDuplicates; out.conflicts += chunkOut.conflicts; out.progressed += chunkOut.progressed;
     });
   }
 }

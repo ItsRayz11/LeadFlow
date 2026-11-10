@@ -11,6 +11,14 @@ export type ColumnMap = {
   owner?: string; // free-text name resolved through identity aliases
   sheetStatus?: string; // kept for display only; the CRM owns status
   contact: string[]; // every column that may hold a phone or an email
+  // Progress the team already tracks in the sheet. All optional: a tab without them still imports.
+  followUp?: string; // stage: Contact Started, 24H, 48H, Final, Not Interested, No Response
+  notes?: string;
+  cardStatus?: string; // 1.Downloaded ... 4.Spending
+  salesQualified?: string; // checkbox columns
+  completedMeeting?: string;
+  onboarded?: string;
+  referralCode?: string;
 };
 
 export const DEFAULT_COLUMN_MAP: ColumnMap = {
@@ -22,6 +30,13 @@ export const DEFAULT_COLUMN_MAP: ColumnMap = {
   owner: "Contacted y",
   sheetStatus: "Status",
   contact: ["whatsapp_number", "phone_number", "email"],
+  followUp: "Lead Follow Up",
+  notes: "Notes",
+  cardStatus: "Card Status",
+  salesQualified: "sales qualified",
+  completedMeeting: "completed meeting",
+  onboarded: "onboarded",
+  referralCode: "referral code",
 };
 
 export function parseSheetUrl(input: string): { spreadsheetId: string; gid: string | null } | null {
@@ -114,6 +129,8 @@ export type ParsedRow = {
   sheetStatus: string | null;
   acquiredAt: Date | null;
   raw: Record<string, string>;
+  /** Raw progress cells; turned into CRM fields by sheetprogress. */
+  progress: { stage: string | null; notes: string | null; card: string | null; salesQualified: string | null; completedMeeting: string | null; onboarded: string | null; referralCode: string | null };
 };
 
 export type ParseResult = { rows: ParsedRow[]; skipped: { reason: string; count: number }[]; missingColumns: string[]; headers: string[] };
@@ -135,6 +152,11 @@ export function parseWorksheet(
   const srcIx = need("Source", map.source, false);
   const ownIx = need("Owner", map.owner, false);
   const stIx = need("Status", map.sheetStatus, false);
+  const prog = {
+    stage: indexesOf(headers, map.followUp), notes: indexesOf(headers, map.notes), card: indexesOf(headers, map.cardStatus),
+    salesQualified: indexesOf(headers, map.salesQualified), completedMeeting: indexesOf(headers, map.completedMeeting),
+    onboarded: indexesOf(headers, map.onboarded), referralCode: indexesOf(headers, map.referralCode),
+  };
   const contactIx = map.contact.flatMap((c) => indexesOf(headers, c));
   if (missing.length) return { rows: [], skipped: [], missingColumns: missing, headers };
 
@@ -146,7 +168,7 @@ export function parseWorksheet(
 
   for (let n = headerRow + 1; n < table.length; n++) {
     const r = table[n];
-    if (!r || r.every((c) => !c.trim())) continue; // blank filler rows
+    if (!r || r.every((c) => !c.trim() || /^false$/i.test(c.trim()))) continue; // blank filler rows, including rows that only hold empty checkboxes
     const externalId = first(r, idIx);
     const name = first(r, nameIx);
     if (!externalId) { bump("no lead id"); continue; }
@@ -169,6 +191,11 @@ export function parseWorksheet(
       ownerAlias: ownerText ? cleanAlias(ownerText) || null : null,
       sheetStatus: first(r, stIx) || null,
       acquiredAt: parseSheetDate(first(r, dateIx), tz, toUtc), raw,
+      progress: {
+        stage: first(r, prog.stage) || null, notes: first(r, prog.notes).slice(0, 2000) || null, card: first(r, prog.card) || null,
+        salesQualified: first(r, prog.salesQualified) || null, completedMeeting: first(r, prog.completedMeeting) || null,
+        onboarded: first(r, prog.onboarded) || null, referralCode: first(r, prog.referralCode) || null,
+      },
     });
   }
   return { rows: out, skipped: [...skipped].map(([reason, count]) => ({ reason, count })), missingColumns: [], headers };
