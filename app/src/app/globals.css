@@ -244,3 +244,31 @@ button:disabled,.btn:disabled{opacity:.55;cursor:not-allowed}
 a.chip{color:inherit}
 a.chip.primary,a.btn{color:var(--accent-ink)}
 .chip{cursor:pointer}
+
+/* Searchable multi-select (sheet tabs). The menu floats; nothing scrolls sideways. */
+.ms{position:relative;display:grid;gap:4px;min-width:0}
+.ms-label{font-size:12px;color:var(--muted);font-weight:600}
+.ms-btn{min-height:44px;width:100%;padding:8px 12px;border-radius:12px;border:1px solid var(--edge);background:var(--glass-strong);color:var(--fg);font:inherit;display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left}
+.ms-btn:hover,.ms-btn[aria-expanded=true]{border-color:var(--accent)}
+.ms-sum{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ms-menu{position:absolute;z-index:40;top:calc(100% + 6px);left:0;width:min(460px,calc(100vw - 32px));max-width:100%;min-width:min(320px,100%);background:var(--bg,#fff);background:var(--glass-strong);backdrop-filter:blur(14px);border:1px solid var(--edge);border-radius:16px;box-shadow:0 14px 40px rgba(16,33,30,.18);padding:10px;display:grid;gap:8px}
+.ms-search{display:flex;align-items:center;gap:8px;border:1px solid var(--edge);border-radius:12px;padding:0 10px;background:var(--glass-strong)}
+.ms-search input[type=search]{border:0;min-height:38px;padding:0;background:transparent;outline:none}
+.ms-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12.5px}
+.ms-link{background:none;border:0;padding:4px 0;color:var(--accent);font-weight:600;font-size:12.5px}
+.ms-link:disabled{opacity:.4}
+.ms-count{margin-left:auto;color:var(--muted)}
+.ms-list{list-style:none;margin:0;padding:0;max-height:min(320px,50vh);overflow-y:auto;overflow-x:hidden;display:grid;gap:2px}
+.ms-opt{display:flex;align-items:flex-start;gap:10px;padding:8px;border-radius:10px;cursor:pointer;min-width:0}
+.ms-opt:hover{background:var(--accent-soft)}
+.ms-opt.dis{opacity:.55;cursor:not-allowed}
+.ms-opt input{margin-top:3px;flex:none;width:16px;height:16px;accent-color:var(--accent)}
+.ms-name{flex:1;min-width:0;overflow-wrap:anywhere;font-size:13.5px;font-weight:500;line-height:1.35}
+.ms-warn{display:block;color:var(--crit);font-weight:500;font-size:12px;margin-top:2px}
+.ms-meta{flex:none;font-family:var(--f-data);font-size:11.5px;color:var(--muted);margin-top:2px}
+.ms-opt .pill{flex:none}
+.ms-empty{padding:10px;color:var(--muted);font-size:13px}
+.ms-foot{display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--edge);padding-top:8px}
+.fbar{display:grid;gap:10px;grid-template-columns:1fr;align-items:end}
+@media(min-width:700px){.fbar{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.tabcell{white-space:normal;min-width:200px;max-width:280px;overflow-wrap:anywhere}

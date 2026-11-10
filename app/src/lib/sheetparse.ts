@@ -169,6 +169,9 @@ export function parseWorksheet(
   for (let n = headerRow + 1; n < table.length; n++) {
     const r = table[n];
     if (!r || r.every((c) => !c.trim() || /^false$/i.test(c.trim()))) continue; // blank filler rows, including rows that only hold empty checkboxes
+    // A header row pasted again further down (every filled cell repeats its column's header) is not a lead.
+    const filled = r.map((c, i) => [c.trim(), i] as const).filter(([c]) => c && !/^false$/i.test(c));
+    if (filled.length && filled.every(([c, i]) => norm(c) === norm(headers[i] ?? ""))) { bump("repeated header row"); continue; }
     const externalId = first(r, idIx);
     const name = first(r, nameIx);
     if (!externalId) { bump("no lead id"); continue; }

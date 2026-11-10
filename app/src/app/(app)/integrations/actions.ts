@@ -4,11 +4,11 @@ import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/db";
 import { requireCtx } from "@/lib/session";
-import { fromZonedTime } from "date-fns-tz";
-import { DEFAULT_COLUMN_MAP, parseSheetUrl, parseWorksheet } from "@/lib/sheetparse";
-import { BudgetError, PermanentSyncError, fetchTabList, fetchWorksheetCsv, syncConnection } from "@/lib/sheetsync";
+import { parseSheetUrl } from "@/lib/sheetparse";
+import { PermanentSyncError, fetchTabList, syncConnection } from "@/lib/sheetsync";
 import { linkAlias, resolveFieldConflict, saveMapping, setProgressWriteback, setSyncMode } from "@/lib/sheetops";
 import { pushConnection } from "@/lib/sheetwrite";
+import { applyTabSelection, checkTabs, enableTabs, tabNames as names, type TabSaveResult } from "@/lib/tabsave";
 import { after } from "next/server";
 import type { R } from "../actions";
 
@@ -27,8 +27,9 @@ const fail = (e: unknown): R => {
 };
 const ok = (message: string): R => { revalidatePath("/integrations"); revalidatePath("/", "layout"); return { ok: true, message }; };
 
+
 /**
- * Connects one tab (scope "tab") or every tab not yet connected (scope "all"). Tabs without the expected columns are reported, never half-connected.
+ * Connects one tab (scope "tab") or every tab not yet connected (scope "all"). Tabs without the expected columns are reported by name, never half-connected.
  * A spreadsheet with many tabs is connected in batches that fit the time limit; running it again continues with the rest.
  */
 async function connectTabs(c: Awaited<ReturnType<typeof manager>>, spreadsheetId: string, scope: "tab" | "all" | "pick", gid: string | null, picked: string[] = []): Promise<R> {
@@ -52,39 +53,13 @@ async function connectTabs(c: Awaited<ReturnType<typeof manager>>, spreadsheetId
     const known = await fetchTabList(spreadsheetId).catch(() => []);
     tabs = [{ gid: gid!, title: known.find((t) => t.gid === gid)?.title ?? `Worksheet ${gid}` }];
   }
-  // Prove each tab is readable and has the expected columns before saving anything.
-  const good: typeof tabs = [], problems: string[] = [];
-  let left = 0;
-  for (const [i, t] of tabs.entries()) {
-    try {
-      const table = await fetchWorksheetCsv(spreadsheetId, t.gid, deadline);
-      if (!table.length) { problems.push(`“${t.title}” is empty`); continue; }
-      const check = parseWorksheet(table, DEFAULT_COLUMN_MAP, c.tz, fromZonedTime);
-      if (check.missingColumns.length) problems.push(`“${t.title}” is missing ${check.missingColumns.join(", ")}`);
-      else good.push(t);
-    } catch (e) {
-      if (e instanceof BudgetError) { left = tabs.length - i; break; }
-      if (scope === "tab") throw e;
-      problems.push(`“${t.title}” could not be read`);
-    }
-  }
+  const { good, problems, left } = await checkTabs(c, spreadsheetId, tabs, deadline, scope === "tab");
   if (!good.length) {
     if (left) return { error: "Reading the tabs took too long. Nothing was connected; try again." };
-    return { error: `Nothing was connected. ${problems.join("; ") || "No tabs found."}.` };
+    return { error: `${tabs.length === 1 ? "That tab" : "None of the selected tabs"} could not be connected. ${names(problems) || "No tabs found"}.` };
   }
-  const [conn] = await db.insert(schema.spreadsheetConnection).values({
-    workspaceId: c.workspaceId, spreadsheetId, title: "Google Sheet", mode: "read_only",
-  }).onConflictDoUpdate({ target: [schema.spreadsheetConnection.workspaceId, schema.spreadsheetConnection.spreadsheetId], set: { healthy: true, lastError: null } })
-    .returning({ id: schema.spreadsheetConnection.id });
-  for (const t of good) {
-    // A tab that was switched off is switched back on and must be confirmed again.
-    await db.insert(schema.worksheetMapping).values({
-      connectionId: conn.id, sheetGid: t.gid, sheetTitle: t.title, enabled: true, headerRow: 1,
-      columnMap: DEFAULT_COLUMN_MAP, identityStrategy: "source_id_column",
-    }).onConflictDoUpdate({ target: [schema.worksheetMapping.connectionId, schema.worksheetMapping.sheetGid], set: { enabled: true, sheetTitle: t.title, confirmedAt: null } });
-  }
-  await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.connect", entity: "spreadsheet_connection", entityId: conn.id, data: { scope, gids: good.map((t) => t.gid) } });
-  const skipped = problems.length ? ` Not connected: ${problems.join("; ")}.` : "";
+  await enableTabs(c, spreadsheetId, good, scope);
+  const skipped = problems.length ? ` Not connected: ${names(problems)}.` : "";
   const more = left ? ` ${left} more tab${left === 1 ? "" : "s"} did not fit in the time allowed. Press “Add more tabs” to continue.` : "";
   return ok(`Connected ${good.length} tab${good.length === 1 ? "" : "s"}. Review the column mapping below, then confirm to import.${skipped}${more}`);
 }
@@ -107,30 +82,27 @@ export async function connectPickedAction(_p: R, fd: FormData): Promise<R> {
 }
 
 /**
- * Saves the full tick-list of tabs for one spreadsheet: newly ticked tabs are connected, unticked tracked tabs are switched off.
- * Tabs that stay ticked keep their mapping and keep syncing automatically.
+ * Saves the tick-list of tabs for one spreadsheet.
+ *  - Only the ticked tabs are validated. A ticked tab with missing columns is reported by name and left off; it never blocks the others.
+ *  - Unticked tabs are switched off (their leads stay). Tabs that stay ticked are not touched, so they keep their mapping and keep syncing.
+ *  - Tabs that appeared in the spreadsheet since and were not ticked stay off. Saving never turns on anything that was not ticked.
+ * Nothing is changed if the live tab list cannot be read, so a save never half-applies.
  */
-export async function saveTabsAction(_p: R, fd: FormData): Promise<R> {
+export async function saveTabsAction(_p: TabSaveResult, fd: FormData): Promise<TabSaveResult> {
   const p = z.object({ connectionId: z.string().uuid() }).safeParse(Object.fromEntries(fd));
   if (!p.success) return { error: "Invalid request." };
-  const ticked = new Set(fd.getAll("gid").map(String).filter((g) => /^\d{1,12}$/.test(g)));
+  const ticked = fd.getAll("gid").map(String).filter((g) => /^\d{1,12}$/.test(g));
   try {
     const c = await manager();
     const [conn] = await db.select({ id: schema.spreadsheetConnection.id, s: schema.spreadsheetConnection.spreadsheetId }).from(schema.spreadsheetConnection)
       .where(and(eq(schema.spreadsheetConnection.id, p.data.connectionId), eq(schema.spreadsheetConnection.workspaceId, c.workspaceId)));
     if (!conn) return { error: "Connection not found." };
-    const maps = await db.select().from(schema.worksheetMapping).where(and(eq(schema.worksheetMapping.connectionId, conn.id), eq(schema.worksheetMapping.enabled, true)));
-    const have = new Set(maps.map((m) => m.sheetGid));
-    const stop = maps.filter((m) => !ticked.has(m.sheetGid));
-    const add = [...ticked].filter((g) => !have.has(g));
-    for (const m of stop) {
-      await db.update(schema.worksheetMapping).set({ enabled: false, confirmedAt: null }).where(eq(schema.worksheetMapping.id, m.id));
-      await db.insert(schema.auditLog).values({ workspaceId: c.workspaceId, actorId: c.userId, action: "sheet.stop_tab", entity: "worksheet_mapping", entityId: m.id, data: {} });
-    }
-    if (!add.length) return ok(stop.length ? `Stopped ${stop.length} tab${stop.length === 1 ? "" : "s"}. Leads already imported stay in the CRM.` : "No changes.");
-    const r = await connectTabs(c, conn.s, "pick", null, add);
-    return stop.length && r?.ok ? { ok: true, message: `${r.message ?? "Saved."} Stopped ${stop.length} other tab${stop.length === 1 ? "" : "s"}.` } : r;
-  } catch (e) { return fail(e); }
+    const live = await fetchTabList(conn.s); // throws before anything is changed
+    return await applyTabSelection(c, { id: conn.id, spreadsheetId: conn.s }, live, ticked);
+  } catch (e) {
+    const r = fail(e);
+    return r ? { ...r } : r;
+  }
 }
 
 /** Looks at the spreadsheet again and connects any tabs that are not connected yet (for example tabs added since, or ones that did not fit last time). */

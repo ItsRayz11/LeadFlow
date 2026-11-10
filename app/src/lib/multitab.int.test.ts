@@ -83,10 +83,10 @@ d("several tabs and disabling a tab (database)", { timeout: 240_000 }, () => {
 
   it("the Leads page filter and its counts follow the tab", async () => {
     const tabs = await leadsLib.trackedTabs(ctx);
-    const mine = Object.fromEntries(tabs.filter((t) => TABS.includes(t.gid as Gid)).map((t) => [t.gid, t.n]));
+    const mine = Object.fromEntries(tabs.filter((t) => t.connectionId === connId).map((t) => [t.gid, t.n]));
     expect(mine).toEqual({ "101": 2, "102": 3, "103": 1 });
     for (const g of TABS) {
-      const shown = (await leadsLib.listLeads(ctx, "all", "", g)).filter((l) => l.name.startsWith("Lead "));
+      const shown = (await leadsLib.listLeads(ctx, "all", "", `${connId}:${g}`)).filter((l) => l.name.startsWith("Lead "));
       expect(shown).toHaveLength(rowsByTab[g].length);
       expect(shown.every((l) => l.name.startsWith(`Lead ${g}-`))).toBe(true);
       expect((await leadsLib.segCounts(ctx, g)).all).toBeGreaterThanOrEqual(rowsByTab[g].length);
@@ -126,7 +126,7 @@ d("several tabs and disabling a tab (database)", { timeout: 240_000 }, () => {
     const off = (await leads()).filter((l) => l.sheetGid === "102");
     expect(off.some((l) => l.name === "Lead 102-1")).toBe(true); // not renamed, not deleted
     const tabs = await leadsLib.trackedTabs(ctx);
-    expect(tabs.some((t) => t.gid === "102")).toBe(false); // gone from the Leads tab buttons, leads still listed under All tabs
+    expect(tabs.find((t) => t.gid === "102" && t.connectionId === connId)).toMatchObject({ state: "paused", n: 3 }); // still offered in the Leads filter, marked paused, leads still counted
     expect((await leadsLib.listLeads(ctx, "all", "", "")).filter((l) => l.name.startsWith("Lead 102-")).length).toBe(3);
   });
 

@@ -3,6 +3,8 @@ import { LeadLink } from "@/components/LeadLink";
 import { LeadViewToggle } from "@/components/LeadViewToggle";
 import { requireCtx, canWrite } from "@/lib/session";
 import { SEGS, listLeads, relTime, segCounts, trackedTabs, type Seg } from "@/lib/leads";
+import { TabFilter } from "@/components/TabFilter";
+import { parseTabKeys, visibleTabTitle } from "@/lib/tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -18,9 +20,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const seg = (SEGS.some(([k]) => k === one(sp.seg)) ? one(sp.seg) : "all") as Seg;
   const q = one(sp.q);
   const tabs = await trackedTabs(c);
-  const tab = tabs.some((t) => t.gid === one(sp.tab)) ? one(sp.tab) : "";
+  // Only tabs this workspace really has; anything else in the address is ignored.
+  const known = new Set(tabs.map((t) => t.key));
+  const tab = parseTabKeys(sp.tab).filter((k) => known.has(k) || !k.includes(":"));
   const [rows, counts] = await Promise.all([listLeads(c, seg, q, tab), segCounts(c, tab)]);
-  const tabQ = tab ? `&tab=${tab}` : "";
+  const tabQ = tab.length ? `&tab=${tab.join(",")}` : "";
   const now = Date.now();
 
   const due = (r: (typeof rows)[number]) =>
@@ -38,19 +42,14 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       <LeadViewToggle />
 
       <section className="panel glass">
-        <form className="filters" action="/leads">
-          <input type="hidden" name="seg" value={seg} />
-          {tab && <input type="hidden" name="tab" value={tab} />}
-          <label className="field"><span>Search name or phone</span><input type="search" name="q" defaultValue={q} placeholder="Search" /></label>
-        </form>
-        {tabs.length > 0 && (
-          <div className="seg" aria-label="Sheet tab">
-            <Link href={`/leads?seg=${seg}${q ? `&q=${encodeURIComponent(q)}` : ""}`} className={tab === "" ? "on" : ""}>All tabs</Link>
-            {tabs.map((t) => (
-              <Link key={t.gid} href={`/leads?seg=${seg}&tab=${t.gid}${q ? `&q=${encodeURIComponent(q)}` : ""}`} className={tab === t.gid ? "on" : ""}>{t.title} <span className="c">{t.n}</span></Link>
-            ))}
-          </div>
-        )}
+        <div className="fbar">
+          <form className="filters" action="/leads">
+            <input type="hidden" name="seg" value={seg} />
+            {tab.length > 0 && <input type="hidden" name="tab" value={tab.join(",")} />}
+            <label className="field"><span>Search name or phone</span><input type="search" name="q" defaultValue={q} placeholder="Search" /></label>
+          </form>
+          {tabs.length > 0 && <TabFilter tabs={tabs} applied={tab.filter((k) => known.has(k))} seg={seg} q={q} />}
+        </div>
         <div className="seg">
           {SEGS.map(([k, label]) => (
             <Link key={k} href={`/leads?seg=${k}${tabQ}${q ? `&q=${encodeURIComponent(q)}` : ""}`} className={seg === k ? "on" : ""}>{label} <span className="c">{counts[k]}</span></Link>
@@ -58,20 +57,20 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         </div>
 
         {rows.length === 0 ? (
-          <div className="empty">{q || seg !== "all" ? "No leads match these filters." : "No leads yet. Add one, or connect the Google Sheet."}</div>
+          <div className="empty">{q || seg !== "all" || tab.length ? "No leads match these filters." : "No leads yet. Add one, or connect the Google Sheet."}</div>
         ) : (
           <>
             <div className="tbl"><div className="tblwrap"><table>
-              <thead><tr><th>Name</th><th>Owner</th><th>Status</th><th>Next follow-up</th><th>Source</th><th>Milestones</th></tr></thead>
+              <thead><tr><th>Name</th><th>Owner</th><th>Status</th><th>Next follow-up</th><th>Source</th><th>Sheet tab</th><th>Milestones</th></tr></thead>
               <tbody>{rows.map((r) => (
                 <tr key={r.id}>
                   <td><LeadLink id={r.id} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub num">{r.phone}</div></LeadLink></td>
-                  <td>{owner(r)}</td><td><span className="pill acc">{STATUS[r.status]}</span></td><td>{due(r)}</td><td>{r.source}</td><td className="num">{r.ms}/4</td>
+                  <td>{owner(r)}</td><td><span className="pill acc">{STATUS[r.status]}</span></td><td>{due(r)}</td><td>{r.source}</td><td className="tabcell" title={r.tabTitle ? visibleTabTitle(r.tabTitle) : undefined}>{r.tabTitle ? visibleTabTitle(r.tabTitle) : "—"}</td><td className="num">{r.ms}/4</td>
                 </tr>))}</tbody>
             </table></div></div>
             <div className="cards m">{rows.map((r) => (
               <LeadLink key={r.id} id={r.id} className="lead" style={{ color: "inherit", textDecoration: "none" }}>
-                <div className="lead-top"><div><b>{r.name}</b><div className="sub">{r.owner ?? "Unassigned"} · {r.source} · {STATUS[r.status]}</div></div>{due(r)}</div>
+                <div className="lead-top"><div><b>{r.name}</b><div className="sub">{r.owner ?? "Unassigned"} · {r.source}{r.tabTitle ? ` · ${visibleTabTitle(r.tabTitle)}` : ""} · {STATUS[r.status]}</div></div>{due(r)}</div>
               </LeadLink>))}</div>
           </>
         )}

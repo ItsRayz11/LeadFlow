@@ -1,4 +1,5 @@
 import "server-only";
+import { isPlaceholderTitle } from "@/lib/tabs";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { fromZonedTime } from "date-fns-tz";
@@ -134,6 +135,19 @@ export async function syncConnection(
   const maps = await db.select().from(schema.worksheetMapping)
     .where(and(eq(schema.worksheetMapping.connectionId, conn.id), eq(schema.worksheetMapping.enabled, true)));
   const confirmed = maps.filter((m) => m.confirmedAt);
+  // Repair id-style names ("Worksheet 123") with the tab's real title. Best effort: a failure here never affects the sync.
+  if (maps.some((m) => isPlaceholderTitle(m.sheetTitle))) {
+    try {
+      const live = await fetchTabList(conn.spreadsheetId);
+      for (const m of maps) {
+        const t = live.find((x) => x.gid === m.sheetGid);
+        if (t && isPlaceholderTitle(m.sheetTitle) && t.title !== m.sheetTitle) {
+          await db.update(schema.worksheetMapping).set({ sheetTitle: t.title }).where(eq(schema.worksheetMapping.id, m.id));
+          m.sheetTitle = t.title;
+        }
+      }
+    } catch { /* keep the old name */ }
+  }
   // Waiting for confirmation is a normal state, not a failure: do nothing and leave health untouched.
   if (!confirmed.length) return { ...emptySummary(), ran: false };
 

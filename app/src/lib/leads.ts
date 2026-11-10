@@ -1,7 +1,8 @@
 import "server-only";
-import { and, desc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "@/db";
 import type { Ctx } from "@/lib/session";
+import { parseTabKeys, splitTabKey, tabKey, tabState, visibleTabTitle, type TabState } from "@/lib/tabs";
 
 const L = schema.lead;
 
@@ -65,24 +66,40 @@ export function segFilter(seg: Seg, tz: string): SQL | undefined {
   }
 }
 
-/** Limits to leads imported from one worksheet tab (by its gid). Empty means every tab. */
-export function tabFilter(tab: string): SQL | undefined {
-  return /^\d{1,12}$/.test(tab) ? eq(L.sheetGid, tab) : undefined;
+/** Limits to leads imported from the given tabs (keys from parseTabKeys). Empty means every tab, including paused ones and manual leads. */
+export function tabFilter(tab: string | string[]): SQL | undefined {
+  const keys = parseTabKeys(tab);
+  if (!keys.length) return undefined;
+  return or(...keys.map((k) => {
+    const { connectionId, gid } = splitTabKey(k);
+    return connectionId ? and(eq(L.connectionId, connectionId), eq(L.sheetGid, gid)) : eq(L.sheetGid, gid);
+  }));
 }
 
-/** The tabs being tracked in this workspace, with how many leads each has in the caller's scope. */
-export async function trackedTabs(c: Ctx) {
-  const tabs = await db.select({ gid: schema.worksheetMapping.sheetGid, title: schema.worksheetMapping.sheetTitle })
+export type TabOption = { key: string; gid: string; connectionId: string; title: string; n: number; state: TabState };
+
+/**
+ * Every tab that has a mapping (syncing, waiting or paused) or has leads in this workspace, with its real lead count in the caller's scope.
+ * Counts are unique CRM leads (merged-away duplicates excluded). Names come from the saved mapping, never from an internal worksheet id.
+ */
+export async function trackedTabs(c: Ctx): Promise<TabOption[]> {
+  const maps = await db.select({ connectionId: schema.worksheetMapping.connectionId, gid: schema.worksheetMapping.sheetGid, title: schema.worksheetMapping.sheetTitle, enabled: schema.worksheetMapping.enabled, confirmedAt: schema.worksheetMapping.confirmedAt })
     .from(schema.worksheetMapping)
     .innerJoin(schema.spreadsheetConnection, eq(schema.spreadsheetConnection.id, schema.worksheetMapping.connectionId))
-    .where(and(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId), eq(schema.worksheetMapping.enabled, true)))
-    .orderBy(schema.worksheetMapping.sheetTitle);
-  const n = await db.select({ gid: L.sheetGid, n: sql<number>`count(*)::int` }).from(L).where(scope(c)).groupBy(L.sheetGid);
-  const by = new Map(n.map((x) => [x.gid, x.n]));
-  return tabs.map((t) => ({ ...t, n: by.get(t.gid) ?? 0 }));
+    .where(eq(schema.spreadsheetConnection.workspaceId, c.workspaceId));
+  const n = await db.select({ conn: L.connectionId, gid: L.sheetGid, n: sql<number>`count(*)::int` }).from(L).where(and(scope(c), isNotNull(L.sheetGid))).groupBy(L.connectionId, L.sheetGid);
+  const by = new Map(n.map((x) => [`${x.conn}:${x.gid}`, x.n]));
+  const out: TabOption[] = maps.map((m) => {
+    const count = by.get(`${m.connectionId}:${m.gid}`) ?? 0;
+    return { key: tabKey(m.connectionId, m.gid), gid: m.gid, connectionId: m.connectionId, title: visibleTabTitle(m.title), n: count, state: tabState(m, count > 0) };
+  });
+  // Leads whose tab mapping no longer exists are still reachable.
+  const known = new Set(maps.map((m) => `${m.connectionId}:${m.gid}`));
+  for (const x of n) if (x.conn && x.gid && !known.has(`${x.conn}:${x.gid}`)) out.push({ key: tabKey(x.conn, x.gid), gid: x.gid, connectionId: x.conn, title: "Removed tab", n: x.n, state: "paused" });
+  return out.sort((a, b) => a.title.localeCompare(b.title));
 }
 
-export async function listLeads(c: Ctx, seg: Seg, q: string, tab = "") {
+export async function listLeads(c: Ctx, seg: Seg, q: string, tab: string | string[] = "") {
   const search = q.trim();
   const digits = search.replace(/\D/g, "");
   const where = and(
@@ -97,17 +114,18 @@ export async function listLeads(c: Ctx, seg: Seg, q: string, tab = "") {
     .select({
       id: L.id, name: L.name, phone: L.phoneRaw, source: L.source, status: L.status, outcome: L.outcome,
       nextFollowUpAt: L.nextFollowUpAt, acquiredAt: L.acquiredAt, closedAt: L.closedAt,
-      owner: schema.workspaceMember.displayName,
+      owner: schema.workspaceMember.displayName, tabTitle: schema.worksheetMapping.sheetTitle,
       ms: sql<number>`(${L.appDownloadedAt} is not null)::int + (${L.referralSharedAt} is not null)::int + (${L.cardPurchasedAt} is not null)::int + (${L.spendingStartedAt} is not null)::int`,
     })
     .from(L)
     .leftJoin(schema.workspaceMember, eq(schema.workspaceMember.id, L.ownerId))
+    .leftJoin(schema.worksheetMapping, and(eq(schema.worksheetMapping.connectionId, L.connectionId), eq(schema.worksheetMapping.sheetGid, L.sheetGid)))
     .where(where)
     .orderBy(desc(L.acquiredAt))
     .limit(200);
 }
 
-export async function segCounts(c: Ctx, tab = "") {
+export async function segCounts(c: Ctx, tab: string | string[] = "") {
   const [r] = await db
     .select({
       all: sql<number>`count(*)::int`,

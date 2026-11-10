@@ -8,6 +8,8 @@ import { parseSheetUrl } from "@/lib/sheetparse";
 import { fetchTabList } from "@/lib/sheetsync";
 import { aliasAction, conflictAction, confirmAllAction, connectPickedAction, addTabsAction, saveTabsAction, progressWritebackAction, sheetModeAction, stopTabAction, syncNowAction } from "./actions";
 import { MappingPanel } from "./MappingPanel";
+import { TabSyncPicker } from "./TabSyncPicker";
+import { tabState, visibleTabTitle } from "@/lib/tabs";
 
 export const dynamic = "force-dynamic";
 // Server actions on this page (import, sync) inherit this limit.
@@ -56,16 +58,28 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
     }
   }
 
-  // Live tick-list of every tab in each connected spreadsheet, so you never have to paste the link again.
+  // Live list of every tab in each connected spreadsheet, merged with what is saved. Saved names are refreshed from Google so an
+  // id-style placeholder ("Worksheet 123") never lingers.
   const tabLists = await Promise.all(cards.map(async ({ cn, maps }) => {
-    try { return { cn, maps, tabs: await fetchTabList(cn.spreadsheetId), err: null as string | null }; }
-    catch (e) { return { cn, maps, tabs: [] as { gid: string; title: string }[], err: e instanceof Error ? e.message : "Tabs could not be listed." }; }
+    const all = await db.select().from(schema.worksheetMapping).where(eq(schema.worksheetMapping.connectionId, cn.id));
+    try {
+      const tabs = await fetchTabList(cn.spreadsheetId);
+      for (const m of all) {
+        const t = tabs.find((x) => x.gid === m.sheetGid);
+        if (t && t.title !== m.sheetTitle) { await db.update(schema.worksheetMapping).set({ sheetTitle: t.title }).where(eq(schema.worksheetMapping.id, m.id)); m.sheetTitle = t.title; }
+      }
+      return { cn, maps, all, tabs, err: null as string | null };
+    } catch (e) { return { cn, maps, all, tabs: [] as { gid: string; title: string }[], err: e instanceof Error ? e.message : "Tabs could not be listed." }; }
   }));
 
   const connIds = conns.map((x) => x.id);
   const [{ imported }] = connIds.length
     ? await db.select({ imported: sql<number>`count(*)::int` }).from(schema.lead).where(inArray(schema.lead.connectionId, connIds))
     : [{ imported: 0 }];
+  const perTab = connIds.length
+    ? await db.select({ conn: schema.lead.connectionId, gid: schema.lead.sheetGid, n: sql<number>`count(*)::int` }).from(schema.lead).where(inArray(schema.lead.connectionId, connIds)).groupBy(schema.lead.connectionId, schema.lead.sheetGid)
+    : [];
+  const leadCounts = new Map(perTab.map((x) => [`${x.conn}:${x.gid}`, x.n]));
   const allMaps = cards.flatMap((x) => x.maps);
   const confirmedN = allMaps.filter((m) => m.confirmedAt).length;
   const twoWay = conns.some((x) => x.mode === "two_way");
@@ -97,30 +111,24 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
         <p className="sub">Optional: for instant updates when someone edits the sheet, paste the script from <code>docs/apps-script/lead-flow-sync.gs</code> into the sheet. The app also syncs every 10 minutes while it is open.</p>
       </section>
 
-      {tabLists.map(({ cn, maps, tabs, err }) => (
-        <section key={`tabs-${cn.id}`} className="panel glass">
-          <h2>Tabs being synced · {cn.title ?? "Google Sheet"} <span className="pill ok">{maps.length} tracked</span></h2>
-          {err ? <p className="err" role="alert">{err}</p> : (
-            <ActionForm action={saveTabsAction}>
-              <input type="hidden" name="connectionId" value={cn.id} />
-              <fieldset className="field" style={{ border: 0, padding: 0 }}>
-                <legend>Tick every tab you work in. Ticked tabs sync automatically, both ways, from now on.</legend>
-                {tabs.map((t) => {
-                  const m = maps.find((x) => x.sheetGid === t.gid);
-                  return (
-                    <label key={t.gid} style={{ display: "block", padding: "4px 0" }}>
-                      <input type="checkbox" name="gid" value={t.gid} defaultChecked={!!m} /> {t.title}
-                      {m && <span className={`pill ${m.confirmedAt ? "ok" : "warn"}`} style={{ marginLeft: 8 }}>{m.confirmedAt ? "Syncing" : "Needs confirm"}</span>}
-                    </label>
-                  );
-                })}
-              </fieldset>
-              <Submit pendingText="Saving tabs">Save tabs</Submit>
-              <p className="sub">Newly ticked tabs are checked first, then appear under “Needs confirm” below. Unticking a tab stops syncing it; its leads stay in the CRM.</p>
-            </ActionForm>
-          )}
-        </section>
-      ))}
+      {tabLists.map(({ cn, maps, all, tabs, err }) => {
+        const pickerTabs = tabs.map((t) => {
+          const m = all.find((x) => x.sheetGid === t.gid);
+          return { gid: t.gid, title: visibleTabTitle(t.title), state: tabState(m, (leadCounts.get(`${cn.id}:${t.gid}`) ?? 0) > 0) };
+        });
+        return (
+          <section key={`tabs-${cn.id}`} className="panel glass">
+            <h2>Tabs being synced · {cn.title ?? "Google Sheet"} <span className="pill ok">{maps.length} selected</span></h2>
+            {err ? <p className="err" role="alert">{err}</p> : (
+              <TabSyncPicker
+                action={saveTabsAction} hidden={{ connectionId: cn.id }} tabs={pickerTabs}
+                initial={maps.map((m) => m.sheetGid)}
+                note="Only the tabs you tick are synced, both ways. Newly ticked tabs are checked first, then wait for your confirmation below before anything is imported. Unticking a tab stops syncing it; its leads stay in the CRM. Tabs added to the spreadsheet later never start syncing until you tick them."
+              />
+            )}
+          </section>
+        );
+      })}
 
       {cards.map(({ cn, maps, jobs }) => (
         <section key={cn.id} className="panel glass">
@@ -230,27 +238,18 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       <section className="panel glass">
         <h2>Choose tabs to track</h2>
         <form method="get" className="grid2" style={{ alignItems: "end" }}>
-          <label className="field"><span>1. Paste your Google Sheets link (any tab will do)</span>
+          <label className="field"><span>Paste your Google Sheets link (any tab will do)</span>
             <input type="url" name="sheet" defaultValue={sheetParam} placeholder="https://docs.google.com/spreadsheets/d/…" required /></label>
           <div><button className="btn">Find tabs</button></div>
         </form>
         {picker && "error" in picker && <p className="err" role="alert">{picker.error}</p>}
         {picker && "tabs" in picker && (
-          <ActionForm action={connectPickedAction}>
-            <input type="hidden" name="spreadsheetId" value={picker.spreadsheetId} />
-            <fieldset className="field" style={{ border: 0, padding: 0 }}>
-              <legend>2. Tick the tab(s) you want to track ({picker.tabs.length} found)</legend>
-              {picker.tabs.map((t) => (
-                <label key={t.gid} style={{ display: "block", opacity: picker.have.has(t.gid) ? 0.6 : 1 }}>
-                  <input type="checkbox" name="gid" value={t.gid} defaultChecked={picker.have.has(t.gid) || t.gid === picker.linked} disabled={picker.have.has(t.gid)} /> {t.title}
-                  {picker.have.has(t.gid) && <span className="sub"> · already tracked</span>}
-                  {t.gid === picker.linked && !picker.have.has(t.gid) && <span className="sub"> · the tab from your link</span>}
-                </label>
-              ))}
-            </fieldset>
-            <Submit pendingText="Checking the tabs">Track the ticked tabs</Submit>
-            <p className="sub">Each tab is checked for the expected columns first. Tabs that do not look like lead lists are reported and left out, never half-connected.</p>
-          </ActionForm>
+          <TabSyncPicker
+            action={connectPickedAction} hidden={{ spreadsheetId: picker.spreadsheetId }} saveLabel="Track the selected tabs"
+            tabs={picker.tabs.map((t) => ({ gid: t.gid, title: visibleTabTitle(t.title), state: picker.have.has(t.gid) ? "syncing" as const : "off" as const, hint: t.gid === picker.linked && !picker.have.has(t.gid) ? "The tab from your link" : undefined }))}
+            initial={[...picker.have, ...(picker.linked && !picker.have.has(picker.linked) ? [picker.linked] : [])]}
+            note="Each tab is checked for the expected columns first. A tab that does not look like a lead list is reported by name and left out; the others are still connected."
+          />
         )}
       </section>
     </>
