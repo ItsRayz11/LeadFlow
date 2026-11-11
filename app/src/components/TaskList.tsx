@@ -27,8 +27,8 @@ function Due({ r, now }: { r: TaskRowDTO; now: number }) {
   return (
     <span suppressHydrationWarning>
       <span className={`pill ${tone(r.dueAt, now) || (r.leadStep === "completed" ? "warn" : "")}`}>{r.dueAt ? rel(r.dueAt, now) : r.leadStep === "completed" ? "Decide outcome" : "No follow-up"}</span>
-      {r.missedAt && <span className="pill mute" title="A deadline was missed" style={{ marginLeft: 4 }}>missed</span>}
-      {r.escalatedAt && <span className="pill crit" title="Escalated to managers" style={{ marginLeft: 4 }}>escalated</span>}
+      {r.missedAt && <span className="pill mute minipill" title="A deadline was missed">missed</span>}
+      {r.escalatedAt && <span className="pill crit minipill" title="Escalated to managers">escalated</span>}
     </span>
   );
 }
@@ -46,20 +46,20 @@ export function TaskList({ rows, owners, canManage, canWrite, selfId }: {
 
   return (
     <>
-      <div className="tbl"><div className="tblwrap"><table>
+      <div className="tbl"><div className="tblwrap dtbl"><table>
         <thead><tr>
-          {canManage && <th style={{ width: 36 }}><input className="chk" type="checkbox" aria-label="Select all" checked={all} onChange={() => setSel(all ? [] : rows.map((r) => r.leadId))} /></th>}
+          {canManage && <th style={{ width: 30 }}><input className="chk" type="checkbox" aria-label="Select all" checked={all} onChange={() => setSel(all ? [] : rows.map((r) => r.leadId))} /></th>}
           <th>Lead</th><th>Owner</th><th>Step</th><th>Due</th><th>Tries</th><th>Actions</th>
         </tr></thead>
         <tbody>{rows.map((r) => (
-          <tr key={r.leadId} style={{ cursor: "default" }}>
+          <tr key={r.leadId} className={r.dueAt && new Date(r.dueAt).getTime() < now ? "tr-over" : ""} style={{ cursor: "default" }}>
             {canManage && <td><input className="chk" type="checkbox" aria-label={`Select ${r.name}`} checked={sel.includes(r.leadId)} onChange={() => toggle(r.leadId)} /></td>}
             <td><LeadLink id={r.leadId} style={{ color: "inherit", textDecoration: "none" }}><b>{r.name}</b><div className="sub num">{r.phone}</div></LeadLink></td>
             <td>{canManage ? <AssignControl leadId={r.leadId} ownerId={r.ownerId} owners={owners} /> : r.owner ?? <span className="pill crit">Unassigned</span>}</td>
-            <td>{STEP[r.step ?? r.leadStep]}</td>
+            <td className="wrap">{STEP[r.step ?? r.leadStep]}</td>
             <td><Due r={r} now={now} /></td>
             <td className="num">{r.attempts}</td>
-            <td>{canAct(r) ? <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><QuickActions leadId={r.leadId} name={r.name} phone={r.phone} compact /><RescheduleButton leadId={r.leadId} name={r.name} /></div> : <span className="sub">View only</span>}</td>
+            <td>{canAct(r) ? <div className="acts"><QuickActions leadId={r.leadId} name={r.name} phone={r.phone} compact /><RescheduleButton leadId={r.leadId} name={r.name} compact /></div> : <span className="sub">View only</span>}</td>
           </tr>))}</tbody>
       </table></div></div>
 

@@ -115,6 +115,8 @@ export async function listLeads(c: Ctx, seg: Seg, q: string, tab: string | strin
       id: L.id, name: L.name, phone: L.phoneRaw, source: L.source, status: L.status, outcome: L.outcome,
       nextFollowUpAt: L.nextFollowUpAt, acquiredAt: L.acquiredAt, closedAt: L.closedAt,
       owner: schema.workspaceMember.displayName, tabTitle: schema.worksheetMapping.sheetTitle,
+      mApp: sql<boolean>`${L.appDownloadedAt} is not null`, mRef: sql<boolean>`${L.referralSharedAt} is not null`,
+      mCard: sql<boolean>`${L.cardPurchasedAt} is not null`, mSpend: sql<boolean>`${L.spendingStartedAt} is not null`,
       ms: sql<number>`(${L.appDownloadedAt} is not null)::int + (${L.referralSharedAt} is not null)::int + (${L.cardPurchasedAt} is not null)::int + (${L.spendingStartedAt} is not null)::int`,
     })
     .from(L)

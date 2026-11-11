@@ -151,7 +151,7 @@ svg.i{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke
 .seg button .c{font-family:var(--f-data);font-size:11px;opacity:.85}
 .field{display:grid;gap:4px;min-width:0}
 .field>span{font-size:12px;color:var(--muted);font-weight:600}
-input[type=text],input[type=password],input[type=email],input[type=tel],input[type=number],input[type=search],input[type=time],input[type=datetime-local],select,textarea{width:100%;min-height:44px;padding:8px 12px;border-radius:12px;border:1px solid var(--edge);background:var(--glass-strong);color:var(--fg);font:inherit}
+input[type=text],input[type=password],input[type=email],input[type=tel],input[type=number],input[type=search],input[type=url],input[type=time],input[type=datetime-local],select,textarea{width:100%;min-height:44px;padding:8px 12px;border-radius:12px;border:1px solid var(--edge);background:var(--glass-strong);color:var(--fg);font:inherit}
 textarea{min-height:72px;resize:vertical}
 .filters{display:grid;gap:10px}
 .filters .row{display:grid;grid-template-columns:1fr;gap:10px}
@@ -327,3 +327,120 @@ a.chip.primary,a.btn{color:var(--accent-ink)}
 .otabs a{flex:1 0 auto;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:0 18px;border-radius:12px;color:var(--fg);font-weight:600;text-decoration:none;white-space:nowrap}
 .otabs a:hover{background:var(--accent-soft)}
 .otabs a.on{background:var(--accent);color:var(--accent-ink)}
+
+/* ===== Compact density system (Leads, Follow-ups, Integrations) ===== */
+.top.slim{gap:6px 12px}
+.top.slim h1{font-size:22px}
+.top.slim p{font-size:12.5px;margin:0}
+.top.slim .acts{align-items:center;gap:8px}
+.panel.tight{padding:12px;gap:8px}
+.btn.sm,.chip.sm{min-height:32px;padding:0 12px;font-size:12.5px;border-radius:10px}
+.chip.sm{padding:0 9px}
+.chip.ico{width:32px;padding:0;justify-content:center}
+.vt{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.vt .chip{min-height:28px;padding:0 10px;font-size:12px;border-radius:8px}
+
+/* Status filter pills: wrap instead of scrolling */
+.fseg{display:flex;flex-wrap:wrap;gap:4px}
+.fseg a{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:0 9px;border-radius:999px;border:1px solid var(--edge);background:var(--glass-strong);font-weight:600;font-size:12px;text-decoration:none;color:inherit;white-space:nowrap}
+.fseg a:hover{border-color:var(--accent)}
+.fseg a.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.fseg a .c{font-family:var(--f-data);font-size:10.5px;opacity:.8;padding:0 5px;border-radius:999px;background:var(--edge)}
+.fseg a.on .c{background:rgba(255,255,255,.22);opacity:1}
+
+/* One-row toolbar */
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.toolbar form{display:contents}
+.toolbar .tb-search{flex:1 1 220px;min-width:180px;max-width:360px;position:relative}
+.toolbar input,.toolbar select,.toolbar .ms-btn{min-height:34px;padding:4px 10px;font-size:13px;border-radius:10px}
+.toolbar select{width:auto;min-width:130px}
+.toolbar .tb-search input{width:100%}
+.toolbar .ms{display:block;min-width:190px;width:220px}
+.toolbar .ms-label,.sr{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.toolbar .ms-menu{width:min(420px,calc(100vw - 32px))}
+.toolbar .tb-end{margin-left:auto}
+
+/* Dense data table */
+.dtbl{overflow-x:auto;border-radius:12px;border:1px solid var(--edge);background:var(--glass-strong)}
+.dtbl table{min-width:0;table-layout:auto}
+.dtbl th{padding:6px 10px;font-size:10.5px;background:var(--glass-strong)}
+.dtbl td{padding:5px 10px;font-size:13px;line-height:1.25;vertical-align:middle}
+.dtbl tbody tr:last-child td{border-bottom:0}
+.dtbl td b{font-weight:600}
+.dtbl .sub{font-size:11.5px}
+.dtbl .pill{font-size:11px;padding:2px 8px}
+.dtbl .wrap{white-space:normal}
+.dtbl td.tabcell{min-width:0;max-width:200px}
+.dtbl .cut{max-width:180px;overflow:hidden;text-overflow:ellipsis;display:block}
+.dtbl select{min-height:28px;padding:2px 8px;font-size:12px;border-radius:8px;min-width:110px}
+.dtbl .chk{width:16px;height:16px}
+.dtbl .acts{flex-wrap:nowrap;gap:4px}
+.dtbl .chip{min-height:28px;padding:0 8px;font-size:12px;border-radius:8px}
+.dtbl .chip.ico{width:28px;padding:0}
+.dtbl .tr-over td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+.ms-pips{display:inline-flex;align-items:center;gap:3px}
+.ms-pips i{width:16px;height:16px;border-radius:5px;display:grid;place-items:center;background:var(--edge);color:var(--muted)}
+.ms-pips i.on{background:var(--accent-soft);color:var(--accent)}
+.ms-pips em{font-style:normal;font-family:var(--f-data);font-size:11px;color:var(--muted);margin-left:4px}
+.minipill{display:inline-flex;font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:999px;margin-left:4px}
+
+/* Integrations dashboard */
+.igrid{display:grid;gap:12px;align-items:start}
+@media(min-width:1100px){.igrid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.igrid>.span2{grid-column:1/-1}
+.icard{padding:14px;display:grid;gap:10px;min-width:0;align-content:start}
+.icard h2{font-size:15px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.icard h2 .pill{font-size:11px}
+.chk-list{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.chk-list li{display:flex;gap:10px;align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--edge)}
+.chk-list li:last-child{border-bottom:0}
+.chk-list .dotn{flex:none;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700;background:var(--edge);color:var(--muted);margin-top:1px}
+.chk-list .dotn.ok{background:var(--good-soft);color:var(--good)}
+.chk-list .dotn.next{background:var(--warn-soft);color:var(--warn)}
+.chk-list b{font-size:13px;font-weight:600}
+.chk-list .sub{font-size:12px;margin-top:0}
+.chk-list li.later{opacity:.62}
+.kvc{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px;margin:0}
+.kvc dt{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.kvc dd{margin:1px 0 0;font-size:13px;min-width:0;overflow-wrap:anywhere}
+.kvc .full{grid-column:1/-1}
+.trow{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:7px 0;border-bottom:1px solid var(--edge)}
+.trow:last-child{border-bottom:0}
+.trow .tn{flex:1 1 180px;min-width:0;font-weight:600;font-size:13px;overflow-wrap:anywhere}
+.trow .tact{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.trow form{margin:0}
+.hist{list-style:none;margin:0;padding:0;display:grid}
+.hist li{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--edge);font-size:12.5px}
+.hist li:last-child{border-bottom:0}
+.hist .nums{font-family:var(--f-data);font-size:11.5px;color:var(--muted);white-space:nowrap}
+.hist .nums b{color:var(--fg);font-weight:600}
+.hist .when2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist .errl{grid-column:1/-1;color:var(--crit);font-size:11.5px}
+.inline-form{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.inline-form input{flex:1 1 240px;min-height:34px;padding:4px 10px;font-size:13px;border-radius:10px}
+.icard .ms-btn{min-height:34px;padding:4px 10px;font-size:13px;border-radius:10px}
+.icard .ms{display:block}
+.icard .tabpick{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
+.icard .tabpick>.ms{flex:1 1 220px;min-width:0}
+.icard .tabpick>div{margin-top:0!important}
+.icard .tabpick>p{flex-basis:100%;margin:0}
+.icard .tabpick .btn{min-height:34px;font-size:13px;padding:0 14px;border-radius:10px}
+.icard .btn,.icard .chip{min-height:34px;font-size:13px}
+
+@media(max-width:699px){
+  .toolbar .tb-search{max-width:none}
+  .toolbar .ms,.toolbar select{width:100%;flex:1 1 100%}
+  .kvc{grid-template-columns:1fr}
+  .hist li{grid-template-columns:70px minmax(0,1fr)}
+  .hist .nums{grid-column:2}
+}
+.chk-list.cols2{grid-template-columns:1fr}
+@media(min-width:900px){.chk-list.cols2{grid-template-columns:1fr 1fr;column-gap:24px}}
+.inline-form p{flex-basis:100%;margin:0}
+.dtbl .acts form,.trow form{margin:0}
+
+/* Content rows hug their content instead of stretching to the sidebar's height */
+.main{align-content:start}
+.panel,.icard{align-content:start}
+.fseg{align-items:center;align-content:flex-start}
+.igrid{align-content:start}
