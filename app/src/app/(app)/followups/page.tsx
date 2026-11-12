@@ -46,23 +46,21 @@ export default async function FollowUps({ searchParams }: { searchParams: Promis
 
   return (
     <>
-      <header className="top"><div><h1>Follow-ups</h1><p>Overdue tasks stay here until someone resolves them.</p></div></header>
-      <section className="panel glass">
-        <div className="seg" role="tablist" aria-label="Follow-up views">
+      <header className="top slim"><div><h1>Follow-ups</h1></div></header>
+      <section className="panel glass tight">
+        <nav className="fseg" aria-label="Follow-up views">
           {views.map((v) => (
-            <Link key={v.key} href={href(v.key)} className={view === v.key ? "on" : ""} role="tab" aria-selected={view === v.key}>
+            <Link key={v.key} href={href(v.key)} className={view === v.key ? "on" : ""} aria-current={view === v.key ? "page" : undefined}>
               {v.label} <span className="c">{counts[v.key]}</span>
             </Link>
           ))}
-        </div>
-        <form className="filters" action="/followups">
+        </nav>
+        <form className="toolbar" action="/followups">
           <input type="hidden" name="view" value={view} />
-          <div className="row">
-            <label className="field"><span>Search name or phone</span><input type="search" name="q" defaultValue={q} placeholder="Search" /></label>
-            {mgr && <label className="field"><span>Owner</span><select name="owner" defaultValue={ownerId}><option value="">Everyone</option>{ownerOpts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>}
-            <label className="field"><span>Sort</span><select name="sort" defaultValue={sort}><option value="">Due soonest</option><option value="-due">Due latest</option><option value="name">Name</option>{mgr && <option value="owner">Owner</option>}</select></label>
-          </div>
-          <button className="chip" style={{ justifySelf: "start" }}>Apply</button>
+          <label className="tb-search"><span className="sr">Search name or phone</span><input type="search" name="q" defaultValue={q} placeholder="Search name or phone" /></label>
+          {mgr && <label><span className="sr">Owner</span><select name="owner" defaultValue={ownerId}><option value="">All owners</option>{ownerOpts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>}
+          <label><span className="sr">Sort</span><select name="sort" defaultValue={sort}><option value="">Due soonest</option><option value="-due">Due latest</option><option value="name">Name</option>{mgr && <option value="owner">Owner</option>}</select></label>
+          <button className="btn sm">Apply</button>
         </form>
 
         {stats.length > 0 && (
