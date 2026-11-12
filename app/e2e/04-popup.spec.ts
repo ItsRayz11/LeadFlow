@@ -7,7 +7,9 @@ const OWNER = { email: E2E.ownerEmail, password: "Owner-pass-12345", name: "Owne
 test("a lead opens in a pop-up over the list, edits save in place, and the full-page choice is respected", async ({ page, browser }) => {
   const api = await pwRequest.newContext({ baseURL: E2E.base, extraHTTPHeaders: { origin: E2E.base, "x-forwarded-for": "10.9.0.1" } });
   const r = await api.post("/api/auth/sign-up/email", { data: { email: OWNER.email, password: OWNER.password, name: OWNER.name }, headers: { "x-setup-token": E2E.setupToken } });
-  expect([200, 403]).toContain(r.status()); // 403: the main suite already registered this owner
+  // 403: the main suite already registered this owner; 422: the owner already exists in a reused database.
+  // Sign-in below fails if the owner is genuinely missing.
+  expect([200, 403, 422]).toContain(r.status());
   await api.dispose();
 
   await page.goto("/login");

@@ -14,7 +14,7 @@ export const TAB_DEFS: { key: TabKey; label: string; Icon: typeof Clock; manager
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : "–");
 const hrs = (h: number | null) => (h == null ? "–" : h < 1 ? `${Math.max(1, Math.round(h * 60))} min` : h < 48 ? `${h.toFixed(1)} h` : `${(h / 24).toFixed(1)} d`);
 const dayLabel = (iso: string) => new Date(iso + "T12:00:00Z").toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
-const STAGE: Record<string, string> = { contact_started: "Contact started", h24: "24H follow-up", h48: "48H follow-up", final: "Final follow-up", completed: "No follow-up planned" };
+const STAGE: Record<string, string> = { contact_started: "Contact started", h24: "Follow-up", h48: "48H follow-up", final: "Final follow-up", completed: "No follow-up planned" };
 const STAGE_ORDER = ["contact_started", "h24", "h48", "final", "completed"];
 
 export function TabNav({ active, isManager }: { active: TabKey; isManager: boolean }) {

@@ -320,10 +320,16 @@ export async function applyProgress(tx: Tx, conn: typeof schema.spreadsheetConne
   }
   const note = opts.forced ? null : r.progress.notes?.trim();
   if (note) {
-    await tx.insert(schema.leadActivity).values({
-      leadId: lead.id, workspaceId: conn.workspaceId, type: "note", actorId: null, summary: `Note from the sheet: ${note}`,
-      idempotencyKey: `sheetnote:${createHash("sha1").update(note).digest("hex").slice(0, 16)}`,
-    }).onConflictDoNothing();
+    const hash = createHash("sha1").update(note).digest("hex").slice(0, 16);
+    // A cell the CRM itself wrote (a CRM note pushed to a two-way sheet) is already in the timeline: never import it a second time.
+    const ours = ((cust as { crmNoteCells?: string[] }).crmNoteCells ?? []).includes(hash);
+    if (!ours) {
+      await tx.insert(schema.leadActivity).values({
+        leadId: lead.id, workspaceId: conn.workspaceId, type: "note", actorId: null, summary: `Note from the sheet: ${note}`,
+        data: { source: "google_sheets", text: note, sheetTab: conn.title ?? null },
+        idempotencyKey: `sheetnote:${hash}`,
+      }).onConflictDoNothing();
+    }
   }
 }
 

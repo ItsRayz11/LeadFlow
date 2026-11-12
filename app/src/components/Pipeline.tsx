@@ -3,7 +3,7 @@ import Link from "next/link";
 import { CheckCircle2, Flame, Layers, MinusCircle, PhoneCall, Star, Target, XCircle, type LucideIcon } from "lucide-react";
 import type { Pipeline as P } from "@/lib/insights";
 
-const STAGE: Record<string, string> = { contact_started: "Contact started", h24: "24H follow-up", h48: "48H follow-up", final: "Final follow-up", completed: "No follow-up planned" };
+const STAGE: Record<string, string> = { contact_started: "Contact started", h24: "Follow-up", h48: "48H follow-up", final: "Final follow-up", completed: "No follow-up planned" };
 const STATUS: Record<string, string> = {
   new: "New", contacted: "Contacted", interested: "Interested", proposal_sent: "Proposal sent", converted: "Converted",
   not_interested: "Not interested", no_response: "No response", cold: "Cold",

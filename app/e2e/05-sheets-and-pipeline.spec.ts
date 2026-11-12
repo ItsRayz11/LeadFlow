@@ -63,11 +63,11 @@ test("the new lead views open without error", async () => {
 test("Integrations has the Start here checklist and the tab picker", async () => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/integrations");
-  await expect(page.getByRole("heading", { name: /Start here/ })).toBeVisible();
-  await expect(page.getByText("Choose the tab you work in")).toBeVisible();
-  await expect(page.getByText("Turn on two-way sync").first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Choose tabs to track" })).toBeVisible();
-  await expect(page.getByText("Do this next")).toHaveCount(1); // exactly one step is highlighted
+  await expect(page.getByRole("heading", { name: /Setup checklist/ })).toBeVisible();
+  await expect(page.getByText("Choose Tabs", { exact: true })).toBeVisible();
+  await expect(page.getByText("Enable Two-Way Sync", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Add more tabs" })).toBeVisible();
+  await expect(page.getByText("Next", { exact: true })).toHaveCount(1); // exactly one step is highlighted
   await page.screenshot({ path: "e2e/screens/integrations-start-here.png", fullPage: true });
 });
 

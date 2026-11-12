@@ -254,6 +254,8 @@ export const followUpTask = pgTable("follow_up_task", {
   channel: channelEnum("channel"),
   outcome: interactionOutcomeEnum("outcome"),
   anchorAt: ts("anchor_at"), // recorded event this due time was computed from
+  // "auto": computed by the scheduler (7 days after the last completed contact). "manual": a person picked the date; automation never moves it.
+  dateSource: text("date_source").notNull().default("auto"),
   createdBy: text("created_by"),
   updatedAt: ts("updated_at").notNull().defaultNow(),
   // Makes ingest/cron idempotent: one task per lead+step+slot

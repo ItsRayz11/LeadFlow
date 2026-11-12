@@ -1,0 +1,1 @@
+ALTER TABLE "follow_up_task" ADD COLUMN "date_source" text DEFAULT 'auto' NOT NULL;

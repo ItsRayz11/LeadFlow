@@ -255,30 +255,37 @@ test.describe("follow-up engine", () => {
     expect(l.first_contacted_at).toBeNull(); // a missed call is not a contact
   });
 
-  test("contact schedules 24H, 48H and final anchored to first contact", async () => {
+  test("first contact schedules a follow-up 7 days later; each completed follow-up schedules the next", async () => {
+    const week = 7 * 24 * 3600e3;
     await log(powerPage, "WhatsApp", "Spoke to lead", "Wants the card");
     let l = await leadRow("Ayesha Khan");
     const first = new Date(l.first_contacted_at).getTime();
     expect(first).toBeGreaterThan(0);
     let t = await pending("Ayesha Khan");
     expect(t.step).toBe("h24");
-    expect(Math.abs(new Date(t.due_at).getTime() - (first + 24 * 3600e3))).toBeLessThan(60_000);
+    expect(Math.abs(new Date(t.due_at).getTime() - (first + week))).toBeLessThan(60_000);
 
-    await log(powerPage, "Call", "Spoke to lead");
+    // The prominent "Mark Follow-up Done" button completes it and the next one appears without typing a date.
+    await powerPage.goto(`/leads/${ids.ayesha}`);
+    await expect(powerPage.getByText("Follow-up pending").first()).toBeVisible();
+    const before = Date.now();
+    await powerPage.getByRole("button", { name: "Mark Follow-up Done" }).click();
+    await expect(powerPage.getByText("Follow-up done. The next one is scheduled.")).toBeVisible();
     t = await pending("Ayesha Khan");
-    expect(t.step).toBe("h48");
-    expect(Math.abs(new Date(t.due_at).getTime() - (first + 48 * 3600e3))).toBeLessThan(60_000);
+    expect(t.step).toBe("h24");
+    expect(Math.abs(new Date(t.due_at).getTime() - (before + week))).toBeLessThan(90_000);
+    await expect(powerPage.getByText(/Done .* by Power/).first()).toBeVisible();
 
     await log(powerPage, "Call", "Interested");
     t = await pending("Ayesha Khan");
-    expect(t.step).toBe("final");
-    expect(Math.abs(new Date(t.due_at).getTime() - (first + 72 * 3600e3))).toBeLessThan(60_000);
+    expect(t.step).toBe("h24");
     l = await leadRow("Ayesha Khan");
     expect(l.status).toBe("interested");
 
-    const hist = await q<{ step: string; status: string; outcome: string | null }>(
-      `select t.step, t.status, t.outcome from follow_up_task t join lead l on l.id = t.lead_id where l.name = 'Ayesha Khan' order by t.created_at`);
-    expect(hist.map((h) => `${h.step}:${h.status}`)).toEqual(["contact_started:completed", "h24:completed", "h48:completed", "final:pending"]);
+    const hist = await q<{ step: string; status: string; completed_by: string | null }>(
+      `select t.step, t.status, t.completed_by from follow_up_task t join lead l on l.id = t.lead_id where l.name = 'Ayesha Khan' order by t.created_at`);
+    expect(hist.map((h) => `${h.step}:${h.status}`)).toEqual(["contact_started:completed", "h24:completed", "h24:completed", "h24:pending"]);
+    expect(hist.slice(0, 3).every((h) => !!h.completed_by)).toBe(true); // who completed each one is recorded
   });
 
   test("overdue stays visible, shows for the owner and the manager, and persists missed history", async () => {
@@ -331,18 +338,20 @@ test.describe("follow-up engine", () => {
     await expect(adminPage.getByText("Escalation: Ayesha Khan")).toBeVisible();
   });
 
-  test("final follow-up completes the sequence without closing the lead; it lands in Needs decision", async () => {
+  test("a completed overdue follow-up schedules the next one, keeps the miss on record, and never drops the lead from the list", async () => {
     await powerPage.goto(`/leads/${ids.ayesha}`);
     await log(powerPage, "Call", "Spoke to lead");
-    expect(await pending("Ayesha Khan")).toBeUndefined();
+    const t = await pending("Ayesha Khan");
+    expect(t).toBeDefined();
+    expect((new Date(t.due_at).getTime() - Date.now()) / 86400e3).toBeGreaterThan(6.9);
     const l = await leadRow("Ayesha Khan");
-    expect(l.follow_up_step).toBe("completed"); expect(l.closed_at).toBeNull();
+    expect(l.closed_at).toBeNull();
     const [m] = await q<{ n: string }>(`select count(*) n from follow_up_task where lead_id = $1 and first_missed_at is not null`, [ids.ayesha]);
     expect(Number(m.n)).toBe(1); // the miss is still on record
-    await powerPage.goto("/followups?view=decide");
+    await powerPage.goto("/followups?view=upcoming");
     await expect(powerPage.getByText("Ayesha Khan").first()).toBeVisible();
     await powerPage.goto("/followups?view=completed");
-    await expect(powerPage.getByText("Final follow-up").first()).toBeVisible();
+    await expect(powerPage.getByText("Follow-up").first()).toBeVisible();
   });
 
   test("reschedule creates a new task and keeps the old one in history", async () => {
@@ -350,14 +359,17 @@ test.describe("follow-up engine", () => {
     await adminPage.getByLabel("Owner").selectOption({ label: "Power" });
     await adminPage.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
     await expect(adminPage.getByRole("dialog")).toBeHidden();
-    await adminPage.getByRole("button", { name: /^Reschedule/ }).first().click();
-    await adminPage.getByRole("dialog").getByRole("button", { name: "Tomorrow" }).click();
-    await adminPage.getByRole("dialog").getByRole("button", { name: /^Reschedule to/ }).click();
-    await expect(adminPage.getByRole("dialog")).toBeHidden();
+    // The date override lives in the Follow-up card: a plain calendar date, read as 10:00 workspace time.
+    const picked = new Date(Date.now() + 3 * 86400e3 + 5 * 3600e3).toISOString().slice(0, 10);
+    await adminPage.getByLabel("Change the next follow-up date").fill(picked);
+    await adminPage.getByRole("button", { name: "Save date" }).click();
+    await expect(adminPage.getByText("Next follow-up date saved.")).toBeVisible();
     const h = await q<{ step: string; status: string }>(`select t.step, t.status from follow_up_task t where lead_id = $1 order by created_at`, [ids.bilal]);
     expect(h.map((x) => x.status)).toEqual(["rescheduled", "pending"]);
     const t = await pending("Bilal Ahmed");
-    expect((new Date(t.due_at).getTime() - Date.now()) / 3600e3).toBeGreaterThan(23);
+    expect((new Date(t.due_at).getTime() - Date.now()) / 3600e3).toBeGreaterThan(48);
+    const [src] = await q<{ date_source: string }>(`select date_source from follow_up_task where lead_id = $1 and status = 'pending'`, [ids.bilal]);
+    expect(src.date_source).toBe("manual"); // a date a person chose is marked so automation never moves it
   });
 
   test("close and reopen preserve history", async () => {
@@ -433,15 +445,15 @@ test.describe("team management", () => {
 test.describe("settings and errors", () => {
   test("settings validate and apply", async () => {
     await adminPage.goto("/settings");
-    await adminPage.getByLabel("First follow-up").fill("60");
+    await adminPage.getByLabel("Follow-up interval").fill("0");
     await adminPage.getByRole("button", { name: "Save settings" }).click();
-    await expect(adminPage.getByText("Intervals must increase")).toBeVisible();
-    await adminPage.getByLabel("First follow-up").fill("12");
+    await expect(adminPage.getByText("Settings saved.")).toHaveCount(0); // 0 days is refused
+    await adminPage.getByLabel("Follow-up interval").fill("10");
     await adminPage.getByRole("button", { name: "Save settings" }).click();
     await expect(adminPage.getByText("Settings saved.")).toBeVisible();
-    const [w] = await q<{ s: { h24: number } }>(`select settings s from workspace`);
-    expect(w.s.h24).toBe(12);
-    await adminPage.getByLabel("First follow-up").fill("24");
+    const [w] = await q<{ s: { followUpDays: number } }>(`select settings s from workspace`);
+    expect(w.s.followUpDays).toBe(10);
+    await adminPage.getByLabel("Follow-up interval").fill("7");
     await adminPage.getByRole("button", { name: "Save settings" }).click();
     await expect(adminPage.getByText("Settings saved.")).toBeVisible();
   });

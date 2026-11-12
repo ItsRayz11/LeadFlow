@@ -30,11 +30,10 @@ export default async function SettingsPage() {
         <fieldset disabled={!admin} style={{ border: 0, padding: 0, margin: 0, display: "contents" }}>
           <section className="panel glass">
             <h2>Follow-up schedule</h2>
-            <p className="sub">Measured from the first recorded contact with the lead, not from when a task was closed.</p>
+            <p className="sub">After a contact is confirmed, the next follow-up is scheduled this many calendar days later, and again after each completed follow-up. A date picked by hand is never changed automatically.</p>
             <N name="firstContactMin" label="First contact due after assignment" value={s.firstContactMin} unit="minutes" />
-            <N name="h24" label="First follow-up" value={s.h24} unit="hours after first contact" />
-            <N name="h48" label="Second follow-up" value={s.h48} unit="hours after first contact" />
-            <N name="hFinal" label="Final follow-up" value={s.hFinal} unit="hours after first contact" />
+            <N name="followUpDays" label="Follow-up interval" value={s.followUpDays} unit="calendar days" />
+            <input type="hidden" name="h24" value={s.h24} /><input type="hidden" name="h48" value={s.h48} /><input type="hidden" name="hFinal" value={s.hFinal} />
             <N name="minGapMin" label="Never schedule sooner than" value={s.minGapMin} unit="minutes from now" />
           </section>
           <section className="panel glass">

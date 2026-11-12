@@ -151,6 +151,7 @@ export async function settingsAction(_p: R, fd: FormData): Promise<R> {
     h24: z.coerce.number().min(1).max(720), h48: z.coerce.number().min(1).max(720), hFinal: z.coerce.number().min(1).max(720),
     minGapMin: z.coerce.number().min(0).max(1440), retryNoAnswerMin: z.coerce.number().min(1).max(10080), maxNoAnswer: z.coerce.number().int().min(1).max(10),
     firstContactMin: z.coerce.number().min(1).max(10080), escalateAfterMin: z.coerce.number().min(1).max(10080), advanceReminderMin: z.coerce.number().min(0).max(1440),
+    followUpDays: z.coerce.number().int().min(1).max(90),
     quietStart: z.string().regex(/^\d{2}:\d{2}$/), quietEnd: z.string().regex(/^\d{2}:\d{2}$/), quietEnabled: z.string().optional(),
     timezone: z.string().refine((z) => { try { new Intl.DateTimeFormat("en", { timeZone: z }); return true; } catch { return false; } }, "Unknown time zone."),
   }).safeParse(obj(fd));

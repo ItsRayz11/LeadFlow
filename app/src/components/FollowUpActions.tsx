@@ -32,7 +32,7 @@ const toIso = (local: string) => (local ? new Date(local).toISOString() : "");
 const localInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 
 /** Call / WhatsApp shortcuts plus the result sheet. Opening a link is never treated as proof of contact. */
-export function QuickActions({ leadId, name, phone, disabled, compact }: { leadId: string; name: string; phone: string | null; disabled?: boolean; compact?: boolean }) {
+export function QuickActions({ leadId, name, phone, disabled, compact, logOnly }: { leadId: string; name: string; phone: string | null; disabled?: boolean; compact?: boolean; logOnly?: boolean }) {
   const [open, setOpen] = useState(false);
   const [channel, setChannel] = useState<string>("call");
   const [outcome, setOutcome] = useState<string>("");
@@ -43,9 +43,9 @@ export function QuickActions({ leadId, name, phone, disabled, compact }: { leadI
   return (
     <>
       <div className="acts">
-        {phone && !disabled && <a className="chip" href={`tel:${phone.replace(/[^\d+]/g, "")}`} onClick={() => launch("call")} aria-label={`Call ${name}`}><Phone size={16} />{compact ? "" : "Call"}</a>}
-        {digits && !disabled && <a className="chip" href={`https://wa.me/${digits}`} target="_blank" rel="noopener noreferrer" onClick={() => launch("whatsapp")} aria-label={`WhatsApp ${name}`}><MessageCircle size={16} />{compact ? "" : "WhatsApp"}</a>}
-        {!disabled && <button type="button" className="chip primary" onClick={() => launch(channel)}><ClipboardCheck size={16} />Log result</button>}
+        {phone && !disabled && !logOnly && <a className={`chip${compact ? " ico" : ""}`} title="Call" href={`tel:${phone.replace(/[^\d+]/g, "")}`} onClick={() => launch("call")} aria-label={`Call ${name}`}><Phone size={15} />{compact ? "" : "Call"}</a>}
+        {digits && !disabled && !logOnly && <a className={`chip${compact ? " ico" : ""}`} title="WhatsApp" href={`https://wa.me/${digits}`} target="_blank" rel="noopener noreferrer" onClick={() => launch("whatsapp")} aria-label={`WhatsApp ${name}`}><MessageCircle size={15} />{compact ? "" : "WhatsApp"}</a>}
+        {!disabled && <button type="button" className={logOnly ? "chip" : "chip primary"} onClick={() => launch(channel)}><ClipboardCheck size={15} />Log result</button>}
       </div>
       {open && (
         <Sheet title={`Log result: ${name}`} onClose={() => setOpen(false)}>
@@ -73,13 +73,13 @@ export function QuickActions({ leadId, name, phone, disabled, compact }: { leadI
 
 const PRESETS = [["+4 h", 4], ["Tomorrow", 24], ["+48 h", 48]] as const;
 
-export function RescheduleButton({ leadId, name, disabled }: { leadId: string; name: string; disabled?: boolean }) {
+export function RescheduleButton({ leadId, name, disabled, compact }: { leadId: string; name: string; disabled?: boolean; compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [iso, setIso] = useState("");
   if (disabled) return null;
   return (
     <>
-      <button type="button" className="chip" onClick={() => setOpen(true)} aria-label={`Reschedule ${name}`}><Clock size={16} />Reschedule</button>
+      <button type="button" className={`chip${compact ? " ico" : ""}`} title="Reschedule" onClick={() => setOpen(true)} aria-label={`Reschedule ${name}`}><Clock size={15} />{compact ? "" : "Reschedule"}</button>
       {open && (
         <Sheet title={`Reschedule: ${name}`} onClose={() => setOpen(false)}>
           <ActionForm action={scheduleAction} className="panel" onOk={() => setOpen(false)}>
@@ -101,7 +101,7 @@ export function AssignControl({ leadId, ownerId, owners }: { leadId: string; own
   const [pick, setPick] = useState<string | null>(null);
   return (
     <>
-      <label className="field" style={{ minWidth: 140 }}><span className="label" style={{ position: "absolute", left: -9999 }}>Owner</span>
+      <label className="field" style={{ minWidth: 110 }}><span className="label" style={{ position: "absolute", left: -9999 }}>Owner</span>
         <select value={ownerId ?? ""} onChange={(e) => setPick(e.target.value)} aria-label="Owner">
           <option value="">Unassigned</option>{owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
         </select></label>

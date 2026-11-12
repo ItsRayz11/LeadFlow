@@ -18,24 +18,16 @@ function Pick({ name, label, value, headers, optional }: { name: string; label: 
 /** Shows what a mapping would import (headers, counts, three sample rows) and lets a manager change it. Nothing is imported from here. */
 export async function MappingPanel({ spreadsheetId, m, tz, show }: { spreadsheetId: string; m: Mapping; tz: string; show: boolean }) {
   const map = { ...DEFAULT_COLUMN_MAP, ...(m.columnMap as Partial<ColumnMap>) } as ColumnMap;
-  if (!show) {
-    // Reading the sheet on every page view is slow and can hit Google rate limits, so a confirmed mapping previews only on request.
-    return (
-      <div style={{ marginTop: 12 }}>
-        <h3>{m.sheetTitle} <span className="pill ok">Mapped</span></h3>
-        <p className="sub">Each lead is identified by the “{map.externalId}” column, never by its row number.</p>
-        <a className="chip" href={`/integrations?preview=${m.id}`}>Preview and change the mapping</a>
-      </div>
-    );
-  }
+  // A confirmed mapping previews only on request: reading the sheet on every view is slow and can hit Google rate limits.
+  if (!show) return null;
   let pv: Awaited<ReturnType<typeof previewWorksheet>> | null = null;
   let err: string | null = null;
   try { pv = await previewWorksheet(spreadsheetId, m.sheetGid, map, m.headerRow, tz); } catch (e) { err = e instanceof Error ? e.message : "Could not read the sheet."; }
 
   return (
-    <div style={{ marginTop: 12 }}>
-      <h3>{m.sheetTitle} {m.confirmedAt ? <span className="pill ok">Mapped</span> : <span className="pill warn">Not confirmed</span>}</h3>
-      <p className="sub">Each lead is identified by the “{map.externalId}” column, never by its row number.</p>
+    <div className="icard glass">
+      <h2>{m.sheetTitle} {m.confirmedAt ? <span className="pill ok">Mapped</span> : <span className="pill warn">Not confirmed</span>}</h2>
+      <p className="sub">Leads are identified by the “{map.externalId}” column, never by row number.</p>
       {err && <p className="err" role="alert">{err}</p>}
       {pv && (
         <>
