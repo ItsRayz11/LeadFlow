@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_SETTINGS as S, bucketOf, dayKey, dueFor, escalationDue, inQuietHours, localMinutes, nextStep, readSettings, retryAt,
+  DEFAULT_SETTINGS as S, addCalendarDays, bucketOf, dateAtMorning, stepAfter, dayKey, dueFor, escalationDue, inQuietHours, localMinutes, nextStep, readSettings, retryAt,
 } from "./schedule";
 
 const TZ = "Asia/Karachi"; // UTC+5, no DST
@@ -89,5 +89,28 @@ describe("settings parsing", () => {
   it("falls back to defaults on bad input", () => {
     expect(readSettings(null)).toEqual(S);
     expect(readSettings({ h24: -5, h48: "x" }).h24).toBe(24);
+  });
+});
+
+describe("7-day follow-up rule", () => {
+  it("defaults to 7 calendar days and rejects nonsense", () => {
+    expect(readSettings({}).followUpDays).toBe(7);
+    expect(readSettings({ followUpDays: 14 }).followUpDays).toBe(14);
+    expect(readSettings({ followUpDays: 0 }).followUpDays).toBe(7);
+  });
+  it("adds calendar days at the same local time, across a daylight-saving change", () => {
+    expect(addCalendarDays(new Date("2026-11-12T07:30:00Z"), 7, "Asia/Karachi").toISOString()).toBe("2026-11-19T07:30:00.000Z");
+    // London clocks go back on 25 Oct 2026: 13:00 local (BST) stays 13:00 local (GMT), so UTC does not move by 7x24h.
+    expect(addCalendarDays(new Date("2026-10-21T12:00:00Z"), 7, "Europe/London").toISOString()).toBe("2026-10-28T13:00:00.000Z");
+  });
+  it("reads a picked date as 10:00 in the workspace zone", () => {
+    expect(dateAtMorning("2026-11-19", "Asia/Karachi")?.toISOString()).toBe("2026-11-19T05:00:00.000Z");
+    expect(dateAtMorning("19/11/2026", "Asia/Karachi")).toBeNull();
+  });
+  it("first contact leads to the recurring follow-up; later steps stay as they are", () => {
+    expect(stepAfter("contact_started")).toBe("h24");
+    expect(stepAfter("h24")).toBe("h24");
+    expect(stepAfter("completed")).toBe("h24");
+    expect(stepAfter("final")).toBe("final");
   });
 });

@@ -12,7 +12,7 @@ export type TaskRowDTO = {
 };
 export type DoneRowDTO = { leadId: string; name: string; owner: string | null; step: string; outcome: string | null; channel: string | null; completedAt: string | null; notes: string | null };
 
-const STEP: Record<string, string> = { contact_started: "First contact", h24: "24H follow-up", h48: "48H follow-up", final: "Final follow-up", completed: "Sequence complete" };
+const STEP: Record<string, string> = { contact_started: "First contact", h24: "Follow-up", h48: "48H follow-up", final: "Final follow-up", completed: "Sequence complete" };
 const OUT: Record<string, string> = { reached: "Spoke to lead", no_answer: "No answer", interested: "Interested", callback_requested: "Callback requested", converted: "Converted", not_interested: "Not interested", dropped: "Dropped" };
 
 function rel(iso: string | null, now: number) {

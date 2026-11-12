@@ -5,7 +5,9 @@
  * Due times are anchored to the lead's recorded first contact (a real logged event), not to a label
  * and not to when the previous task happened to be closed.
  */
-export const STEP_ORDER = ["contact_started", "h24", "h48", "final"] as const;
+import { fromZonedTime, toZonedTime } from "date-fns-tz";
+
+export const STEP_ORDER =["contact_started", "h24", "h48", "final"] as const;
 export type Step = (typeof STEP_ORDER)[number];
 export type LeadStep = Step | "completed";
 
@@ -27,6 +29,8 @@ export type Settings = {
   /** Optional heads-up before the due time. 0 disables it. */
   advanceReminderMin: number;
   quiet: { enabled: boolean; start: string; end: string };
+  /** Calendar days between one completed contact and the next follow-up. */
+  followUpDays: number;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -34,6 +38,7 @@ export const DEFAULT_SETTINGS: Settings = {
   minGapMin: 60, retryNoAnswerMin: 240, maxNoAnswer: 3, firstContactMin: 60,
   escalateAfterMin: 120, advanceReminderMin: 0,
   quiet: { enabled: true, start: "22:00", end: "07:00" },
+  followUpDays: 7,
 };
 
 export function readSettings(raw: unknown): Settings {
@@ -48,11 +53,32 @@ export function readSettings(raw: unknown): Settings {
     maxNoAnswer: n(r.maxNoAnswer, d.maxNoAnswer, 1), firstContactMin: n(r.firstContactMin, d.firstContactMin, 1),
     escalateAfterMin: n(r.escalateAfterMin, d.escalateAfterMin, 1), advanceReminderMin: n(r.advanceReminderMin, d.advanceReminderMin),
     quiet: { enabled: q.enabled ?? d.quiet.enabled, start: hhmm(q.start, d.quiet.start), end: hhmm(q.end, d.quiet.end) },
+    followUpDays: Math.round(n(r.followUpDays, d.followUpDays, 1)),
   };
+}
+
+/** Same wall-clock time `days` calendar days later in the given zone (so a daylight-saving change cannot shift it by an hour). */
+export function addCalendarDays(from: Date, days: number, tz: string): Date {
+  const local = toZonedTime(from, tz);
+  local.setDate(local.getDate() + days);
+  return fromZonedTime(local, tz);
+}
+
+/** Interprets a plain calendar date ("2026-11-19") as 10:00 in the workspace zone. Returns null for anything else. */
+export function dateAtMorning(ymd: string, tz: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return null;
+  const d = fromZonedTime(`${ymd}T10:00:00`, tz);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 const MIN = 60_000;
 const HOUR = 3_600_000;
+
+/** After a completed contact the lead moves to the recurring follow-up (stored as "h24"; shown as "Follow-up"). Later steps stay as they are. */
+export function stepAfter(step: LeadStep): Step {
+  return step === "contact_started" || step === "completed" ? "h24" : (step as Step);
+}
 
 export function nextStep(step: LeadStep): Step | null {
   const i = STEP_ORDER.indexOf(step as Step);

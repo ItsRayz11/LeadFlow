@@ -70,8 +70,8 @@ d("follow-up engine (database)", () => {
     ]);
     const t = await tasks(l.id);
     expect(t.filter((x) => x.status === "pending")).toHaveLength(1);
-    // Each request advanced one step. createdAt is the transaction start time, so two overlapping transactions can swap it: compare as a set.
-    expect(t.map((x) => x.step).sort()).toEqual(["contact_started", "h24", "h48"].sort());
+    // The first request confirms contact and the second completes the follow-up that created. createdAt is the transaction start time, so two overlapping transactions can swap it: compare as a set.
+    expect(t.map((x) => x.step).sort()).toEqual(["contact_started", "h24", "h24"].sort());
     const [row] = await db.select().from(schema.lead).where(eq(schema.lead.id, l.id));
     expect(row.followUpAttempts).toBe(2);
     expect(row.version).toBeGreaterThanOrEqual(3);
@@ -87,7 +87,7 @@ d("follow-up engine (database)", () => {
     expect(new Set(t.map((x) => x.dedupeKey)).size).toBe(t.length); // no duplicate task keys
   });
 
-  it("no answer never closes the lead; the sequence moves on after the limit", async () => {
+  it("no answer never closes the lead and never invents a follow-up: first contact stays pending", async () => {
     const l = await mkLead("noanswer");
     for (let i = 0; i < 3; i++) await eng.recordOutcome(ctx, { leadId: l.id, requestId: rid(), outcome: "no_answer", channel: "call" });
     const [row] = await db.select().from(schema.lead).where(eq(schema.lead.id, l.id));
@@ -95,7 +95,63 @@ d("follow-up engine (database)", () => {
     expect(row.firstContactedAt).toBeNull();
     expect(row.followUpAttempts).toBe(3);
     const t = await tasks(l.id);
-    expect(t.map((x) => `${x.step}:${x.status}`)).toEqual(["contact_started:completed", "h24:pending"]);
+    expect(t.map((x) => `${x.step}:${x.status}`)).toEqual(["contact_started:pending"]);
+    expect(row.nextFollowUpAt).not.toBeNull(); // a retry is scheduled
+  });
+
+  it("first confirmed contact schedules the first follow-up 7 calendar days later; each completed follow-up schedules the next", async () => {
+    const l = await mkLead("seven");
+    const before = Date.now();
+    await eng.recordOutcome(ctx, { leadId: l.id, requestId: rid(), outcome: "reached", channel: "call" });
+    let [row] = await db.select().from(schema.lead).where(eq(schema.lead.id, l.id));
+    const days = (d: Date | null) => Math.round(((d?.getTime() ?? 0) - before) / 86400e3);
+    expect(row.firstContactedAt).not.toBeNull();
+    expect(days(row.nextFollowUpAt)).toBe(7);
+    const r1 = await eng.completeFollowUp(ctx, { leadId: l.id, requestId: rid(), notes: "spoke again" });
+    expect(r1.duplicate).toBe(false);
+    [row] = await db.select().from(schema.lead).where(eq(schema.lead.id, l.id));
+    expect(days(row.nextFollowUpAt)).toBe(7);
+    const t = await tasks(l.id);
+    expect(t.map((x) => x.status)).toEqual(["completed", "completed", "pending"]); // history is kept
+    const done = t[1];
+    expect(done.completedBy).toBe(ctx.userId);
+    expect(done.completedAt).not.toBeNull();
+    expect(t[2].dateSource).toBe("auto");
+  });
+
+  it("Mark Follow-up Done is refused before first contact, is idempotent, and honours a chosen date", async () => {
+    const l = await mkLead("fudone");
+    await expect(eng.completeFollowUp(ctx, { leadId: l.id, requestId: rid(), notes: "x" })).rejects.toThrow(/first contact/i);
+    await eng.recordOutcome(ctx, { leadId: l.id, requestId: rid(), outcome: "reached", channel: "whatsapp" });
+    const requestId = rid();
+    const pick = new Date(Date.now() + 3 * 86400e3);
+    const res = await Promise.all([eng.completeFollowUp(ctx, { leadId: l.id, requestId, nextAt: pick }), eng.completeFollowUp(ctx, { leadId: l.id, requestId, nextAt: pick })]);
+    expect(res.filter((r) => !r.duplicate)).toHaveLength(1);
+    const t = await tasks(l.id);
+    expect(t.filter((x) => x.status === "pending")).toHaveLength(1);
+    const open = t.find((x) => x.status === "pending")!;
+    expect(open.dueAt.getTime()).toBe(pick.getTime());
+    expect(open.dateSource).toBe("manual");
+  });
+
+  it("a date chosen by hand is not moved by an unanswered attempt", async () => {
+    const l = await mkLead("manual");
+    await eng.recordOutcome(ctx, { leadId: l.id, requestId: rid(), outcome: "reached", channel: "call" });
+    const at = new Date(Date.now() + 20 * 86400e3);
+    await eng.scheduleNext(ctx, { leadId: l.id, requestId: rid(), at });
+    await eng.recordOutcome(ctx, { leadId: l.id, requestId: rid(), outcome: "no_answer", channel: "call" });
+    const open = (await tasks(l.id)).find((x) => x.status === "pending")!;
+    expect(open.dueAt.getTime()).toBe(at.getTime());
+    expect(open.attempts).toBe(1);
+  });
+
+  it("an imported sheet note is not a contact: it never sets first contact or schedules a follow-up", async () => {
+    const l = await mkLead("sheetnote");
+    await db.insert(schema.leadActivity).values({ leadId: l.id, workspaceId: ctx.workspaceId, type: "note", actorId: null, summary: "Note from the sheet: Called twice", data: { source: "google_sheets", text: "Called twice" } });
+    const [row] = await db.select().from(schema.lead).where(eq(schema.lead.id, l.id));
+    expect(row.firstContactedAt).toBeNull();
+    expect(row.followUpAttempts).toBe(0);
+    expect((await tasks(l.id)).map((x) => `${x.step}:${x.status}`)).toEqual(["contact_started:pending"]);
   });
 
   it("closing twice is idempotent, reopening restores one open task, and history is kept", async () => {

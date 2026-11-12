@@ -32,7 +32,7 @@ const toIso = (local: string) => (local ? new Date(local).toISOString() : "");
 const localInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 
 /** Call / WhatsApp shortcuts plus the result sheet. Opening a link is never treated as proof of contact. */
-export function QuickActions({ leadId, name, phone, disabled, compact }: { leadId: string; name: string; phone: string | null; disabled?: boolean; compact?: boolean }) {
+export function QuickActions({ leadId, name, phone, disabled, compact, logOnly }: { leadId: string; name: string; phone: string | null; disabled?: boolean; compact?: boolean; logOnly?: boolean }) {
   const [open, setOpen] = useState(false);
   const [channel, setChannel] = useState<string>("call");
   const [outcome, setOutcome] = useState<string>("");
@@ -43,9 +43,9 @@ export function QuickActions({ leadId, name, phone, disabled, compact }: { leadI
   return (
     <>
       <div className="acts">
-        {phone && !disabled && <a className={`chip${compact ? " ico" : ""}`} title="Call" href={`tel:${phone.replace(/[^\d+]/g, "")}`} onClick={() => launch("call")} aria-label={`Call ${name}`}><Phone size={15} />{compact ? "" : "Call"}</a>}
-        {digits && !disabled && <a className={`chip${compact ? " ico" : ""}`} title="WhatsApp" href={`https://wa.me/${digits}`} target="_blank" rel="noopener noreferrer" onClick={() => launch("whatsapp")} aria-label={`WhatsApp ${name}`}><MessageCircle size={15} />{compact ? "" : "WhatsApp"}</a>}
-        {!disabled && <button type="button" className="chip primary" onClick={() => launch(channel)}><ClipboardCheck size={15} />Log result</button>}
+        {phone && !disabled && !logOnly && <a className={`chip${compact ? " ico" : ""}`} title="Call" href={`tel:${phone.replace(/[^\d+]/g, "")}`} onClick={() => launch("call")} aria-label={`Call ${name}`}><Phone size={15} />{compact ? "" : "Call"}</a>}
+        {digits && !disabled && !logOnly && <a className={`chip${compact ? " ico" : ""}`} title="WhatsApp" href={`https://wa.me/${digits}`} target="_blank" rel="noopener noreferrer" onClick={() => launch("whatsapp")} aria-label={`WhatsApp ${name}`}><MessageCircle size={15} />{compact ? "" : "WhatsApp"}</a>}
+        {!disabled && <button type="button" className={logOnly ? "chip" : "chip primary"} onClick={() => launch(channel)}><ClipboardCheck size={15} />Log result</button>}
       </div>
       {open && (
         <Sheet title={`Log result: ${name}`} onClose={() => setOpen(false)}>

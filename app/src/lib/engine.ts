@@ -5,7 +5,7 @@ import { dbTx, type Tx } from "@/db/tx";
 import type { Ctx } from "@/lib/session";
 import { notify } from "@/lib/notify";
 import {
-  dueFor, nextStep, readSettings, retryAt, type Settings, type Step,
+  addCalendarDays, dueFor, readSettings, retryAt, stepAfter, type LeadStep, type Settings, type Step,
 } from "@/lib/schedule";
 
 const L = schema.lead;
@@ -69,24 +69,33 @@ async function log(tx: Tx, ctx: Ctx, lead: LeadRow, a: {
 }
 
 /** One task per lead+step+attempt number. The partial unique index also guarantees a single open task per lead. */
-async function createTask(tx: Tx, ctx: Ctx, lead: LeadRow, step: Step, dueAt: Date, extra: { anchor?: Date | null; priority?: "low" | "normal" | "high" | "urgent"; ownerId?: string | null } = {}) {
+async function createTask(tx: Tx, ctx: Ctx, lead: LeadRow, step: Step, dueAt: Date, extra: { anchor?: Date | null; priority?: "low" | "normal" | "high" | "urgent"; ownerId?: string | null; manual?: boolean } = {}) {
   const [{ n }] = await tx.select({ n: count() }).from(T).where(and(eq(T.leadId, lead.id), eq(T.step, step)));
   const [t] = await tx.insert(T).values({
     workspaceId: ctx.workspaceId, leadId: lead.id, step, dueAt,
     ownerId: extra.ownerId === undefined ? lead.ownerId : extra.ownerId,
-    priority: extra.priority ?? "normal", anchorAt: extra.anchor ?? null, createdBy: ctx.userId,
+    priority: extra.priority ?? "normal", anchorAt: extra.anchor ?? null, createdBy: ctx.userId, dateSource: extra.manual ? "manual" : "auto",
     dedupeKey: `${lead.id}:${step}:${n}`,
   }).returning();
   return t;
 }
 
-/** Moves the lead on after a task was completed. Returns the lead fields to write. */
-async function advance(tx: Tx, ctx: Ctx, lead: LeadRow, task: TaskRow, anchor: Date, now: Date, s: Settings): Promise<LeadUpdate> {
-  const next = nextStep(task.step);
-  if (!next) return { followUpStep: "completed", nextFollowUpAt: null };
-  const due = dueFor(next, anchor, now, s);
-  await createTask(tx, ctx, lead, next, due, { anchor });
-  return { followUpStep: next, nextFollowUpAt: due };
+/** The step a new task takes: the open task's own step, else the recurring follow-up once the lead has been reached. */
+function stepFor(lead: LeadRow, task?: TaskRow): Step {
+  if (task) return task.step as Step;
+  const cur = lead.followUpStep as LeadStep;
+  return lead.firstContactedAt ? stepAfter(cur) : cur === "completed" ? "contact_started" : cur;
+}
+
+/**
+ * Schedules the next follow-up after a completed contact: `followUpDays` calendar days from now, unless a person picked a date.
+ * Runs only when a contact really happened, so a lead nobody has reached never shows a follow-up it has not earned.
+ */
+async function advance(tx: Tx, ctx: Ctx, lead: LeadRow, task: TaskRow | undefined, now: Date, s: Settings, at?: Date | null): Promise<LeadUpdate> {
+  const step = stepAfter(task ? task.step : (lead.followUpStep as LeadStep));
+  const due = at ?? addCalendarDays(now, s.followUpDays, ctx.tz);
+  await createTask(tx, ctx, lead, step, due, { anchor: now, manual: !!at });
+  return { followUpStep: step, nextFollowUpAt: due };
 }
 
 function closeFields(outcome: LeadOutcome, now: Date, reason?: string | null): LeadUpdate {
@@ -121,7 +130,6 @@ export async function recordOutcome(ctx: Ctx, i: {
       upd.lastContactedAt = now;
       if (!lead.firstContactedAt) upd.firstContactedAt = now;
     }
-    const anchor = (upd.firstContactedAt as Date | undefined) ?? lead.firstContactedAt ?? now;
     const via = CHANNEL_LABEL[i.channel];
     const notes = i.notes?.trim() || null;
     let summary = `${OUTCOME_LABEL[i.outcome]} (${via})`;
@@ -138,35 +146,38 @@ export async function recordOutcome(ctx: Ctx, i: {
       case "no_answer": {
         if (!task) { summary += ". No follow-up is scheduled"; break; }
         const attempts = task.attempts + 1;
-        if (attempts >= s.maxNoAnswer) {
-          // The sequence moves on, but the lead is never closed because of unanswered attempts.
+        if (task.step !== "contact_started" && attempts >= s.maxNoAnswer) {
+          // A follow-up nobody could answer moves on to the next one. The lead is never closed because of unanswered attempts.
           await finishTask(task);
-          Object.assign(upd, await advance(tx, ctx, lead, task, anchor, now, s));
-          summary += `. ${attempts} unanswered attempts, moving to the next step`;
+          Object.assign(upd, await advance(tx, ctx, lead, task, now, s));
+          summary += `. ${attempts} unanswered attempts, next follow-up scheduled`;
+        } else if (task.dateSource === "manual") {
+          // A date a person chose is never moved by automation.
+          await tx.update(T).set({ attempts, channel: i.channel, notes, updatedAt: now }).where(eq(T.id, task.id));
+          summary += `. The scheduled date was kept (attempt ${attempts})`;
         } else {
           const at = retryAt(now, s);
           await tx.update(T).set({ attempts, dueAt: at, channel: i.channel, notes, updatedAt: now }).where(eq(T.id, task.id));
           upd.nextFollowUpAt = at;
-          summary += `. Retry scheduled (attempt ${attempts} of ${s.maxNoAnswer})`;
+          summary += `. Retry scheduled (attempt ${attempts})`;
         }
         break;
       }
       case "reached":
       case "interested": {
         if (lead.status === "new" || (i.outcome === "interested" && lead.status !== "proposal_sent")) upd.status = i.outcome === "interested" ? "interested" : "contacted";
-        if (task) {
-          await finishTask(task);
-          Object.assign(upd, await advance(tx, ctx, lead, task, anchor, now, s));
-        }
+        if (i.nextAt && i.nextAt.getTime() < now.getTime() - 60_000) throw new EngineError("Pick a follow-up date in the future.");
+        if (task) await finishTask(task);
+        Object.assign(upd, await advance(tx, ctx, lead, task, now, s, i.nextAt));
         break;
       }
       case "callback_requested": {
         const at = i.nextAt ?? new Date(now.getTime() + 24 * 3_600_000);
         if (at.getTime() < now.getTime() - 60_000) throw new EngineError("Pick a callback time in the future.");
         if (lead.status === "new") upd.status = "contacted";
-        const step: Step = task ? (task.step as Step) : lead.followUpStep === "completed" ? "final" : lead.followUpStep;
+        const step = stepAfter(stepFor(lead, task));
         if (task) await finishTask(task);
-        await createTask(tx, ctx, lead, step, at, { anchor, priority: "high" });
+        await createTask(tx, ctx, lead, step, at, { anchor: now, priority: "high", manual: true });
         upd.followUpStep = step;
         upd.nextFollowUpAt = at;
         summary += ` for ${at.toISOString()}`;
@@ -199,12 +210,48 @@ export async function scheduleNext(ctx: Ctx, i: { leadId: string; requestId: str
     const now = new Date();
     if (i.at.getTime() < now.getTime() - 60_000) throw new EngineError("Pick a time in the future.");
     const task = await pendingTask(tx, lead.id);
-    const step: Step = task ? (task.step as Step) : lead.followUpStep === "completed" ? "final" : lead.followUpStep;
+    const step = stepFor(lead, task);
     if (task) await tx.update(T).set({ status: "rescheduled", notes: i.notes?.trim() || task.notes, updatedAt: now }).where(eq(T.id, task.id));
-    await createTask(tx, ctx, lead, step, i.at, { anchor: lead.firstContactedAt, priority: task?.priority ?? "normal" });
+    await createTask(tx, ctx, lead, step, i.at, { anchor: lead.lastContactedAt ?? lead.firstContactedAt, priority: task?.priority ?? "normal", manual: true });
     await saveLead(tx, ctx, lead, { followUpStep: step, nextFollowUpAt: i.at }, now);
     await log(tx, ctx, lead, { type: "followup_rescheduled", summary: `Follow-up rescheduled to ${i.at.toISOString()}`, key, data: { from: task?.dueAt ?? null, to: i.at, notes: i.notes ?? null } });
     return { duplicate: false as const };
+  });
+}
+
+/* ---------------- mark a follow-up done ---------------- */
+
+/**
+ * Completes the open follow-up, records who did it and when, and schedules the next one automatically.
+ * The old task stays as history. `nextAt` lets an authorized person choose the next date instead of the default.
+ */
+export async function completeFollowUp(ctx: Ctx, i: { leadId: string; requestId: string; notes?: string; nextAt?: Date | null }) {
+  return dbTx.transaction(async (tx) => {
+    const lead = await loadLead(tx, ctx, i.leadId);
+    const key = `fudone:${i.requestId}`;
+    if (await seen(tx, lead.id, key)) return { duplicate: true as const };
+    if (lead.closedAt) throw new EngineError("This lead is closed. Reopen it first.");
+    const task = await pendingTask(tx, lead.id);
+    if (!task) throw new EngineError("No follow-up is scheduled for this lead.");
+    if (task.step === "contact_started" && !lead.firstContactedAt) throw new EngineError("Confirm the first contact before marking a follow-up done.");
+    const now = new Date();
+    if (i.nextAt && i.nextAt.getTime() < now.getTime() - 60_000) throw new EngineError("Pick a follow-up date in the future.");
+    const s = await settingsOf(tx, ctx);
+    const notes = i.notes?.trim() || null;
+    await tx.update(T).set({ status: "completed", outcome: "reached", notes, completedAt: now, completedBy: ctx.userId, attempts: task.attempts + 1, updatedAt: now }).where(eq(T.id, task.id));
+    const next = await advance(tx, ctx, lead, task, now, s, i.nextAt);
+    await saveLead(tx, ctx, lead, {
+      ...next, followUpAttempts: lead.followUpAttempts + 1, lastResult: "reached", lastContactedAt: now,
+      firstContactedAt: lead.firstContactedAt ?? now,
+      status: lead.status === "new" ? "contacted" : lead.status,
+    }, now);
+    const when = (next.nextFollowUpAt as Date).toLocaleDateString("en-GB", { timeZone: ctx.tz, day: "numeric", month: "short", year: "numeric" });
+    await log(tx, ctx, lead, {
+      type: "followup_completed", summary: `Follow-up marked done by ${ctx.name}. Next follow-up ${when}${i.nextAt ? " (chosen by hand)" : ""}`, key,
+      outcome: "reached", data: { notes, taskId: task.id, dueAt: task.dueAt, next: next.nextFollowUpAt, manual: !!i.nextAt },
+    });
+    if (notes) await log(tx, ctx, lead, { type: "note", summary: notes.slice(0, 2000), key: `${key}:note` });
+    return { duplicate: false as const, nextAt: next.nextFollowUpAt as Date };
   });
 }
 
@@ -277,7 +324,7 @@ export async function reopenLead(ctx: Ctx, i: { leadId: string; requestId: strin
     const upd: LeadUpdate = { outcome: null, closedAt: null, closureReason: null, convertedAt: null, status: lead.firstContactedAt ? "contacted" : "new" };
     if (lead.ownerId && !(await pendingTask(tx, lead.id))) {
       const step: Step = lead.firstContactedAt ? "h24" : "contact_started";
-      const due = dueFor(step, lead.firstContactedAt ?? now, now, s);
+      const due = lead.firstContactedAt ? addCalendarDays(now, s.followUpDays, ctx.tz) : dueFor(step, now, now, s);
       await createTask(tx, ctx, lead, step, due, { anchor: lead.firstContactedAt });
       upd.followUpStep = step;
       upd.nextFollowUpAt = due;
@@ -345,7 +392,8 @@ export async function addNote(ctx: Ctx, i: { leadId: string; requestId: string; 
     const lead = await loadLead(tx, ctx, i.leadId);
     const key = `note:${i.requestId}`;
     if (await seen(tx, lead.id, key)) return { duplicate: true as const };
-    await log(tx, ctx, lead, { type: "note", summary: text.slice(0, 2000), key });
+    // A lead that lives in a sheet gets its note written there too (two-way sheets only; see pushNotes). The note stays in the CRM either way.
+    await log(tx, ctx, lead, { type: "note", summary: text.slice(0, 2000), key, data: lead.connectionId && lead.externalId ? { source: "crm", sheetPush: "pending" } : { source: "crm" } });
     return { duplicate: false as const };
   });
 }

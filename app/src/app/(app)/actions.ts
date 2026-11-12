@@ -5,9 +5,10 @@ import { z } from "zod";
 import { requireCtx } from "@/lib/session";
 import { pushLeadNow } from "@/lib/sheetwrite";
 import {
-  EngineError, addNote, assignLead, bulkAssign, bulkReschedule, closeLead, recordOutcome, reopenLead,
+  EngineError, addNote, assignLead, bulkAssign, bulkReschedule, closeLead, completeFollowUp, recordOutcome, reopenLead,
   scheduleNext, setMilestone, updateLead,
 } from "@/lib/engine";
+import { dateAtMorning, dayKey } from "@/lib/schedule";
 import { schema } from "@/db";
 
 export type R = { ok?: boolean; error?: string; message?: string; link?: string } | undefined;
@@ -47,6 +48,44 @@ export async function scheduleAction(_p: R, fd: FormData): Promise<R> {
     const ctx = await requireCtx();
     await scheduleNext(ctx, { ...p.data, at: new Date(p.data.at) });
     return done("Follow-up scheduled.");
+  } catch (e) { return fail(e); }
+}
+
+const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().or(z.literal("").transform(() => undefined));
+
+/** A plain calendar date picked by a person, read in the workspace time zone. Today means "an hour from now" so it is never already past. */
+function pickedDate(date: string, tz: string): Date | null {
+  const at = dateAtMorning(date, tz);
+  if (!at) return null;
+  const now = new Date();
+  if (at.getTime() >= now.getTime()) return at;
+  return dayKey(at, tz) === dayKey(now, tz) ? new Date(now.getTime() + 3_600_000) : null;
+}
+
+/** "Mark Follow-up Done": completes the open follow-up and schedules the next one automatically unless a date is given. */
+export async function completeFollowUpAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ leadId: uuid, requestId: req, notes: z.string().max(2000).optional(), nextDate: ymd }).safeParse(obj(fd));
+  if (!p.success) return { error: "Check the date and try again." };
+  try {
+    const ctx = await requireCtx();
+    let nextAt: Date | null = null;
+    if (p.data.nextDate) { nextAt = pickedDate(p.data.nextDate, ctx.tz); if (!nextAt) return { error: "Pick today or a later date." }; }
+    const r = await completeFollowUp(ctx, { leadId: p.data.leadId, requestId: p.data.requestId, notes: p.data.notes, nextAt });
+    if (!r.duplicate) after(() => pushLeadNow(p.data.leadId));
+    return done(r.duplicate ? "Already saved." : "Follow-up done. The next one is scheduled.");
+  } catch (e) { return fail(e); }
+}
+
+/** Manual override of the next follow-up date. The chosen date is marked manual, so automation never moves it. */
+export async function setFollowUpDateAction(_p: R, fd: FormData): Promise<R> {
+  const p = z.object({ leadId: uuid, requestId: req, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).safeParse(obj(fd));
+  if (!p.success) return { error: "Pick a date." };
+  try {
+    const ctx = await requireCtx();
+    const at = pickedDate(p.data.date, ctx.tz);
+    if (!at) return { error: "Pick today or a later date." };
+    await scheduleNext(ctx, { leadId: p.data.leadId, requestId: p.data.requestId, at });
+    return done("Next follow-up date saved.");
   } catch (e) { return fail(e); }
 }
 
@@ -102,7 +141,8 @@ export async function noteAction(_p: R, fd: FormData): Promise<R> {
   if (!p.success) return { error: "Write a note first." };
   try {
     const ctx = await requireCtx();
-    await addNote(ctx, p.data);
+    const r = await addNote(ctx, p.data);
+    if (!r.duplicate) after(() => pushLeadNow(p.data.leadId));
     return done("Note added.");
   } catch (e) { return fail(e); }
 }

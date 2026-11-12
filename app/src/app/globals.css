@@ -444,3 +444,10 @@ a.chip.primary,a.btn{color:var(--accent-ink)}
 .panel,.icard{align-content:start}
 .fseg{align-items:center;align-content:flex-start}
 .igrid{align-content:start}
+
+/* Lead panel: follow-up card */
+.fu-card .fu-main{width:100%;min-height:46px;font-size:15px;font-weight:600}
+.fu-card .fu-date{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:6px;padding-top:12px;border-top:1px solid var(--line, rgba(0,0,0,.08))}
+.fu-card .fu-date .field{flex:1 1 180px;margin:0}
+.tl .act-body{white-space:pre-wrap;overflow-wrap:anywhere}
+.fu-card .fu-other{align-items:center;margin-top:6px}

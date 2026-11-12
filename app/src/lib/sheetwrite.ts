@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import { and, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import { formatInTimeZone } from "date-fns-tz";
 import { db, schema } from "@/db";
@@ -66,7 +67,7 @@ export async function pushConnection(connectionId: string, opts: { leadId?: stri
           or ${L.source} is distinct from ${L.custom}->'sheetBase'->>'source')`,
         opts.leadId ? eq(L.id, opts.leadId) : undefined,
       )).limit(BATCH);
-      if (!pending.length) { await pushProgress(conn, m, opts, out); continue; } // nothing to write: do not even read the sheet
+      if (!pending.length) { await pushProgress(conn, m, opts, out); await pushNotes(conn, m, opts, out); continue; } // nothing to write: do not even read the sheet
 
       const map = colMap(m);
       const headerRow = Math.max(0, m.headerRow - 1);
@@ -113,6 +114,7 @@ export async function pushConnection(connectionId: string, opts: { leadId?: stri
         }
       }
       await pushProgress(conn, m, opts, out, table);
+      await pushNotes(conn, m, opts, out);
     } catch (e) {
       out.errors.push(`“${m.sheetTitle}”: ${errText(e)}`);
       if (!(e instanceof SheetsAccessError || e instanceof SheetsTransientError)) console.error("sheet write-back", e);
@@ -188,6 +190,63 @@ async function pushProgress(conn: Conn, m: Mapping, opts: { leadId?: string; dea
         summary: `Wrote status and follow-up stage to the sheet: ${sheetText(a.seen)}`, idempotencyKey: `pushprogress:${a.lead.id}:${a.lead.version}`,
       }).onConflictDoNothing();
     } else out.adopted++;
+  }
+}
+
+/** What the importer hashes for a Notes cell, so a cell the CRM wrote itself is recognised and not imported back as a new note. */
+export const noteCellHash = (cell: string) => createHash("sha1").update(cell.trim().slice(0, 2000).trim()).digest("hex").slice(0, 16);
+
+/** Adds a CRM note under what the sheet already says in the Notes cell. Nothing already in the cell is changed or removed. */
+export function appendNoteToCell(current: string, text: string, who: string, when: string): string {
+  const line = `${text.trim()} [CRM · ${who} · ${when}]`;
+  return current.trim() ? `${current.replace(/\s+$/, "")}\n${line}` : line;
+}
+
+/**
+ * Writes notes typed in the CRM into the sheet's Notes cell, for two-way tabs. Only notes flagged `sheetPush: "pending"` at creation are
+ * sent (older notes are never back-filled into the sheet). The note is marked done only after the write succeeded, so a failure retries.
+ */
+async function pushNotes(conn: Conn, m: Mapping, opts: { leadId?: string; deadline?: number }, out: PushSummary) {
+  const A = schema.leadActivity;
+  const rowsPending = await db.select({ a: A, lead: L }).from(A).innerJoin(L, eq(L.id, A.leadId)).where(and(
+    eq(L.connectionId, conn.id), eq(L.sheetGid, m.sheetGid), sql`${L.externalId} is not null`, isNull(L.mergedIntoId),
+    eq(A.type, "note"), sql`${A.data}->>'sheetPush' = 'pending'`,
+    opts.leadId ? eq(L.id, opts.leadId) : undefined,
+  )).orderBy(A.occurredAt).limit(BATCH);
+  if (!rowsPending.length) return;
+
+  const map = colMap(m);
+  const headerRow = Math.max(0, m.headerRow - 1);
+  const table = await readTableApi(conn.spreadsheetId, m.sheetGid, opts.deadline);
+  const headers = (table[headerRow] ?? []).map((h) => h ?? "");
+  const noteCol = indexesOf(headers, map.notes)[0];
+  if (noteCol === undefined) return; // this tab has no Notes column: the note stays in the CRM only
+  const rows = indexRows(table, headerRow, indexesOf(headers, map.externalId));
+  const [ws] = await db.select({ tz: schema.workspace.timezone }).from(schema.workspace).where(eq(schema.workspace.id, conn.workspaceId));
+  const names = new Map((await db.select({ uid: schema.workspaceMember.userId, n: schema.workspaceMember.displayName }).from(schema.workspaceMember)
+    .where(eq(schema.workspaceMember.workspaceId, conn.workspaceId))).map((x) => [x.uid, x.n]));
+
+  const cells: { row: number; col: number; value: string }[] = [];
+  const written: { actId: string; leadId: string; hash: string }[] = [];
+  const cellNow = new Map<number, string>(); // several notes for one row in one run build on each other
+  for (const { a, lead } of rowsPending) {
+    const row = rows.get((lead.externalId ?? "").trim());
+    if (!row) { out.skipped++; continue; }
+    const current = cellNow.get(row) ?? (table[row - 1]?.[noteCol] ?? "");
+    const next = appendNoteToCell(current, a.summary ?? "", (a.actorId && names.get(a.actorId)) || "CRM", formatInTimeZone(a.occurredAt, ws?.tz ?? "UTC", "d MMM yyyy HH:mm"));
+    cellNow.set(row, next);
+    const prior = cells.findIndex((c) => c.row === row);
+    if (prior >= 0) cells[prior].value = next; else cells.push({ row, col: noteCol + 1, value: next });
+    written.push({ actId: a.id, leadId: lead.id, hash: noteCellHash(next) });
+  }
+  if (!cells.length) return;
+  // Write first, then record it. If the write fails nothing is marked and the next run retries.
+  for (let i = 0; i < cells.length; i += 400) await writeCellsApi(conn.spreadsheetId, m.sheetGid, cells.slice(i, i + 400), opts.deadline);
+  for (const w of written) {
+    await db.update(A).set({ data: sql`coalesce(${A.data}, '{}'::jsonb) || '{"sheetPush":"done"}'::jsonb` }).where(eq(A.id, w.actId));
+    // The cell now holds this exact text; remember it so the next sync does not read the CRM's own note as a new sheet note.
+    await db.update(L).set({ custom: sql`jsonb_set(coalesce(${L.custom}, '{}'::jsonb), '{crmNoteCells}', (coalesce(${L.custom}->'crmNoteCells', '[]'::jsonb) || to_jsonb(${w.hash}::text)))` }).where(eq(L.id, w.leadId));
+    out.updated++;
   }
 }
 
