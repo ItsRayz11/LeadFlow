@@ -445,15 +445,15 @@ test.describe("team management", () => {
 test.describe("settings and errors", () => {
   test("settings validate and apply", async () => {
     await adminPage.goto("/settings");
-    await adminPage.getByLabel("First follow-up").fill("60");
+    await adminPage.getByLabel("Follow-up interval").fill("0");
     await adminPage.getByRole("button", { name: "Save settings" }).click();
-    await expect(adminPage.getByText("Intervals must increase")).toBeVisible();
-    await adminPage.getByLabel("First follow-up").fill("12");
+    await expect(adminPage.getByText("Settings saved.")).toHaveCount(0); // 0 days is refused
+    await adminPage.getByLabel("Follow-up interval").fill("10");
     await adminPage.getByRole("button", { name: "Save settings" }).click();
     await expect(adminPage.getByText("Settings saved.")).toBeVisible();
-    const [w] = await q<{ s: { h24: number } }>(`select settings s from workspace`);
-    expect(w.s.h24).toBe(12);
-    await adminPage.getByLabel("First follow-up").fill("24");
+    const [w] = await q<{ s: { followUpDays: number } }>(`select settings s from workspace`);
+    expect(w.s.followUpDays).toBe(10);
+    await adminPage.getByLabel("Follow-up interval").fill("7");
     await adminPage.getByRole("button", { name: "Save settings" }).click();
     await expect(adminPage.getByText("Settings saved.")).toBeVisible();
   });
